@@ -1,5 +1,7 @@
 const express = require("express");
 const cors = require("cors");
+const errorHandler = require("./core/errors/errorHandler");
+const { sendSuccess } = require("./core/utils/apiResponse");
 
 const app = express();
 
@@ -11,11 +13,12 @@ app.use(
 
 app.use(express.json());
 
+
 app.get("/api/v1/health", (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: "Proovix API is running",
-  });
+  sendSuccess(res, 200, "Proovix API is running");
 });
+
+
+app.use(errorHandler);
 
 module.exports = app;
