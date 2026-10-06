@@ -38,6 +38,37 @@ This is an automated message. Please do not reply to this email.`,
   });
 };
 
+const sendPasswordResetEmail = async (email, resetLink) => {
+  await transporter.sendMail({
+    from: `"Proovix" <${process.env.MAIL_USER}>`,
+    to: email,
+    subject: "Reset your Proovix password",
+    text: `Proovix
+Prove what you can do.
+
+Password Reset
+
+We received a request to reset the password for your Proovix account.
+
+Use the link below to create a new password:
+
+${resetLink}
+
+This password reset link is valid for 15 minutes and can only be used once.
+
+If you did not request a password reset, you can safely ignore this email. Your password will not be changed unless the reset link is used.
+
+For your security, please do not share this link with anyone.
+
+Regards,
+Proovix
+Evidence-Based Skill Verification Platform
+
+This is an automated message. Please do not reply to this email.`,
+  });
+};
+
 module.exports = {
   sendVerificationEmail,
+  sendPasswordResetEmail,
 };

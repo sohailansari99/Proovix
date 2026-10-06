@@ -1,8 +1,13 @@
 const bcrypt = require("bcrypt");
 
 const User = require("../users/user.model");
+
 const AppError = require("../../core/errors/AppError");
+
 const { generateToken } = require("../../core/utils/jwt");
+
+const { validatePassword } = require("../../core/utils/validation");
+
 const { createVerificationCode } = require("./verification.service");
 
 const isValidGmail = (email) => {
@@ -13,6 +18,13 @@ const registerUser = async ({ email, password }) => {
   // Validate Gmail address
   if (!isValidGmail(email)) {
     throw new AppError("Only Gmail addresses are allowed", 400);
+  }
+
+  // Validate password strength
+  const passwordError = validatePassword(password);
+
+  if (passwordError) {
+    throw new AppError(passwordError, 400);
   }
 
   // Check if user already exists
@@ -75,6 +87,7 @@ const loginUser = async ({ email, password }) => {
 
   // Update last login time
   user.lastLoginAt = new Date();
+
   await user.save();
 
   // Generate JWT
