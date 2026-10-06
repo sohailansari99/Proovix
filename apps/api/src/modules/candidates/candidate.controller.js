@@ -1,8 +1,8 @@
 const {
   createCandidateProfile,
   getCandidateProfile,
+  updateCandidateProfile,
 } = require("./candidate.service");
-
 const AppError = require("../../core/errors/AppError");
 
 const {
@@ -61,7 +61,29 @@ const getProfile = async (req, res, next) => {
   }
 };
 
+const updateProfile = async (req, res, next) => {
+  try {
+    // User ID comes from authenticated JWT
+    const userId = req.user.userId;
+
+    const candidate = await updateCandidateProfile(
+      userId,
+      req.body
+    );
+
+    return sendSuccess(
+      res,
+      200,
+      "Candidate profile updated successfully",
+      candidate
+    );
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createProfile,
   getProfile,
+  updateProfile,
 };

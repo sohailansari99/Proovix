@@ -10,6 +10,9 @@ const { sendSuccess } = require("./core/utils/apiResponse");
 const authRoutes = require("./modules/auth/auth.routes");
 const userRoutes = require("./modules/users/users.routes");
 const candidateRoutes = require("./modules/candidates/candidate.routes");
+const skillRoutes = require("./modules/skills/skill.routes");
+const candidateSkillRoutes = require("./modules/skills/candidateSkill.routes");
+
 
 const app = express();
 
@@ -29,6 +32,11 @@ app.use("/api/v1/auth", authRoutes);
 
 app.use("/api/v1/users", userRoutes);
 app.use("/api/v1/candidates", candidateRoutes);
+app.use("/api/v1/skills", skillRoutes);
+app.use(
+  "/api/v1/candidates/me/skills",
+  candidateSkillRoutes
+);
 
 app.use(errorHandler);
 
