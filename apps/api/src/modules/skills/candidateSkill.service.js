@@ -33,21 +33,32 @@ const addSkillToCandidate = async (
     );
   }
 
-  // Prevent duplicate candidate-skill relationship
+  // Check whether candidate already has this skill
   const existingCandidateSkill =
     await CandidateSkill.findOne({
       candidateId: candidate._id,
       skillId: skill._id,
     });
 
+  // If skill exists but was previously deactivated,
+  // reactivate the existing relationship
   if (existingCandidateSkill) {
+    if (!existingCandidateSkill.isActive) {
+      existingCandidateSkill.isActive = true;
+
+      await existingCandidateSkill.save();
+
+      return existingCandidateSkill;
+    }
+
+    // Skill already exists and is active
     throw new AppError(
       "Skill is already added to this candidate",
       409
     );
   }
 
-  // Create relationship
+  // Create new relationship
   const candidateSkill = await CandidateSkill.create({
     candidateId: candidate._id,
     skillId: skill._id,
