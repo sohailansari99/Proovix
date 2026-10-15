@@ -49,6 +49,7 @@ const parseGitHubUrl = (repositoryUrl) => {
   return { owner, repo };
 };
 
+
 const githubRequest = async (endpoint) => {
   let response;
 
@@ -58,6 +59,11 @@ const githubRequest = async (endpoint) => {
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "Proovix",
+        ...(process.env.GITHUB_TOKEN
+          ? {
+              Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+            }
+          : {}),
       },
       signal: AbortSignal.timeout(10000),
     });
@@ -73,8 +79,20 @@ const githubRequest = async (endpoint) => {
   }
 
   if (response.status === 403 || response.status === 429) {
+    const remaining = response.headers.get("x-ratelimit-remaining");
+    const reset = response.headers.get("x-ratelimit-reset");
+
+    if (remaining === "0" && reset) {
+      const resetTime = new Date(Number(reset) * 1000).toISOString();
+
+      throw new AppError(
+        `GitHub API rate limit reached. Reset time: ${resetTime}`,
+        429
+      );
+    }
+
     throw new AppError(
-      "GitHub API rate limit reached. Please try again later.",
+      "GitHub denied the request. Check token permissions or API limits.",
       429
     );
   }

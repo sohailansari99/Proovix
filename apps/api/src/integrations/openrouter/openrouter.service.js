@@ -7,6 +7,219 @@ const {
 const OPENROUTER_URL =
   "https://openrouter.ai/api/v1/chat/completions";
 
+const MAX_SOURCE_CHARACTERS = 18000;
+
+/**
+ * Prioritize files that provide the strongest evidence for evaluation.
+ * External GitHub API integration is especially useful for evaluating
+ * the API integration competency.
+ */
+function getFilePriority(filePath) {
+  if (
+    /\/integrations\/github\/github\.service\.js$/i.test(filePath)
+  ) {
+    return 0;
+  }
+
+  if (/\/modules\/evidence\/evidence\.service\.js$/i.test(filePath)) {
+    return 1;
+  }
+
+  if (
+    /\/modules\/evidence\/evidence\.controller\.js$/i.test(filePath)
+  ) {
+    return 2;
+  }
+
+  if (/\/modules\/skills\//i.test(`/${filePath}`)) {
+    return 3;
+  }
+
+  if (/\/modules\/candidates\//i.test(`/${filePath}`)) {
+    return 4;
+  }
+
+  if (/\/integrations\//i.test(`/${filePath}`)) {
+    return 5;
+  }
+
+  if (/\/modules\/evidence\//i.test(`/${filePath}`)) {
+    return 6;
+  }
+
+  if (/\/(services?|controllers?|models?|routes?)\//i.test(`/${filePath}`)) {
+    return 7;
+  }
+
+  if (/\/(components?|hooks?|utils?|lib)\//i.test(`/${filePath}`)) {
+    return 8;
+  }
+
+  return 9;
+}
+
+/**
+ * Build a source-code context without exceeding the configured
+ * character budget. Higher-priority files are included first.
+ */
+function buildSourceCodeContext(sourceFiles) {
+  if (!Array.isArray(sourceFiles) || sourceFiles.length === 0) {
+    return "No source code was retrieved.";
+  }
+
+  const selectedFiles = sourceFiles
+    .filter(
+      (file) =>
+        file &&
+        typeof file.path === "string" &&
+        typeof file.code === "string" &&
+        file.code.trim().length > 0
+    )
+    .sort((a, b) => {
+      const priorityDifference =
+        getFilePriority(a.path) - getFilePriority(b.path);
+
+      if (priorityDifference !== 0) {
+        return priorityDifference;
+      }
+
+      return a.path.localeCompare(b.path);
+    });
+
+  const sourceSections = [];
+  let remainingCharacters = MAX_SOURCE_CHARACTERS;
+
+  for (const file of selectedFiles) {
+    if (remainingCharacters <= 0) {
+      break;
+    }
+
+    const header = `FILE: ${file.path}\n\`\`\`javascript\n`;
+    const footer = "\n```";
+
+    const availableCodeCharacters =
+      remainingCharacters - header.length - footer.length;
+
+    if (availableCodeCharacters <= 0) {
+      break;
+    }
+
+    const code = file.code.slice(0, availableCodeCharacters);
+
+    sourceSections.push(`${header}${code}${footer}`);
+
+    remainingCharacters -=
+      header.length + code.length + footer.length;
+  }
+
+  return sourceSections.length > 0
+    ? sourceSections.join("\n\n")
+    : "No usable source code was retrieved.";
+}
+
+/**
+ * Validate the AI response and calculate the overall score locally.
+ * Every requested competency must appear exactly once.
+ */
+function validateAndNormalizeAnalysis(analysis, skill) {
+  if (!analysis || typeof analysis !== "object") {
+    throw new AppError("AI returned an invalid analysis object", 502);
+  }
+
+  const expectedCompetencies = Array.isArray(skill.competencies)
+    ? skill.competencies.map((item) => String(item).trim())
+    : [];
+
+  if (expectedCompetencies.length === 0) {
+    throw new AppError("The skill has no defined competencies", 500);
+  }
+
+  if (!Array.isArray(analysis.competencies)) {
+    throw new AppError("AI returned an invalid competency list", 502);
+  }
+
+  const competencyMap = new Map();
+
+  for (const competency of analysis.competencies) {
+    if (
+      !competency ||
+      typeof competency.name !== "string" ||
+      !Number.isInteger(competency.score) ||
+      competency.score < 0 ||
+      competency.score > 100
+    ) {
+      throw new AppError(
+        "AI returned an invalid competency or score",
+        502
+      );
+    }
+
+    const name = competency.name.trim();
+
+    if (!expectedCompetencies.includes(name)) {
+      throw new AppError(
+        `AI returned an unexpected competency: ${name}`,
+        502
+      );
+    }
+
+    if (competencyMap.has(name)) {
+      throw new AppError(
+        `AI returned a duplicate competency: ${name}`,
+        502
+      );
+    }
+
+    competencyMap.set(name, {
+      name,
+      score: competency.score,
+      reason:
+        typeof competency.reason === "string"
+          ? competency.reason
+          : "No explanation was provided.",
+    });
+  }
+
+  const normalizedCompetencies = expectedCompetencies.map((name) => {
+    const competency = competencyMap.get(name);
+
+    if (!competency) {
+      throw new AppError(
+        `AI omitted the required competency: ${name}`,
+        502
+      );
+    }
+
+    return competency;
+  });
+
+  // Calculate the score in JavaScript, not in the AI response.
+  const totalScore = normalizedCompetencies.reduce(
+    (total, competency) => total + competency.score,
+    0
+  );
+
+  const overallEvidenceScore = Math.round(
+    totalScore / normalizedCompetencies.length
+  );
+
+  const normalizeStringArray = (value) =>
+    Array.isArray(value)
+      ? value.filter((item) => typeof item === "string")
+      : [];
+
+  return {
+    summary:
+      typeof analysis.summary === "string"
+        ? analysis.summary
+        : "Evidence analysis completed.",
+    competencies: normalizedCompetencies,
+    strengths: normalizeStringArray(analysis.strengths),
+    missingEvidence: normalizeStringArray(analysis.missingEvidence),
+    overallEvidenceScore,
+  };
+}
+
 const analyzeEvidenceWithAI = async ({ evidence, skill }) => {
   if (!process.env.OPENROUTER_API_KEY) {
     throw new AppError("OpenRouter API key is not configured", 500);
@@ -25,46 +238,26 @@ const analyzeEvidenceWithAI = async ({ evidence, skill }) => {
       8
     );
 
-    const maxTotalCharacters = 18000;
-    let remainingCharacters = maxTotalCharacters;
+    console.log(
+      "[Proovix AI] Source files received:",
+      sourceFiles.map((file) => file.path)
+    );
 
-    const selectedFiles = sourceFiles
-      .filter(
-        (file) =>
-          typeof file.code === "string" &&
-          file.code.trim().length > 0
+    console.log(
+      "[Proovix AI] GitHub integration received:",
+      sourceFiles.some((file) =>
+        file.path.endsWith(
+          "integrations/github/github.service.js"
+        )
       )
-      .sort((a, b) => {
-        const priority = (filePath) => {
-          if (/\/modules\/evidence\//i.test(`/${filePath}`)) return 0;
-          if (/\/modules\/skills\//i.test(`/${filePath}`)) return 1;
-          if (/\/modules\/candidates\//i.test(`/${filePath}`)) return 2;
-          if (/\/integrations\//i.test(`/${filePath}`)) return 3;
-          if (/\/(services?|controllers?|models?|routes?)\//i.test(`/${filePath}`)) return 4;
-          if (/\/(components?|hooks?|utils?|lib)\//i.test(`/${filePath}`)) return 5;
-          return 6;
-        };
+    );
 
-        return priority(a.path) - priority(b.path);
-      });
+    sourceCodeContext = buildSourceCodeContext(sourceFiles);
 
-    const sourceSections = [];
-
-    for (const file of selectedFiles) {
-      if (remainingCharacters <= 0) break;
-
-      const code = file.code.slice(0, remainingCharacters);
-
-      sourceSections.push(
-        `FILE: ${file.path}\n\`\`\`javascript\n${code}\n\`\`\``
-      );
-
-      remainingCharacters -= code.length;
-    }
-
-    if (sourceSections.length > 0) {
-      sourceCodeContext = sourceSections.join("\n\n");
-    }
+    console.log(
+      "[Proovix AI] Source context characters:",
+      sourceCodeContext.length
+    );
   }
 
   const prompt = `
@@ -110,28 +303,46 @@ SCORING:
 81-100: Very strong evidence with comprehensive, specific implementation.
 
 SCORING REQUIREMENTS:
-- Scores above 60 require specific, relevant evidence.
-- Do not award high scores merely because a file or function exists.
-- Creating server routes is not the same as consuming an external API.
-  Route definitions alone do not prove external API integration.
-- For asynchronous programming, identify actual async functions, await
-  expressions, promise handling, or other relevant constructs.
-- For arrays and objects, identify actual usage or manipulation.
-- For variables and data types, identify concrete declarations or usage.
-- For DOM manipulation, require browser DOM-related code.
-- For ES6+ features, identify specific features in the supplied code.
-- Do not penalize a backend project for lacking frontend features.
-  Report such competencies as not demonstrated by this evidence.
-- Do not infer security, testing, performance, code quality, or authorship
-  unless the supplied material directly supports the conclusion.
-- Each competency reason must cite relevant file paths where possible.
-- If evidence is insufficient, explicitly explain what is missing.
-- Keep every score consistent with its written explanation.
+- Score only the evidence actually supplied in this prompt.
+- Scores above 60 require specific, relevant code evidence.
+- Never award high scores merely because a file or function exists.
+- Cite exact source-file paths and explain the relevant code behavior.
+- Do not claim that the candidate personally authored the code.
+- Missing evidence means insufficient evidence, not proof of inability.
+- Do not infer testing, security, performance, or authorship without evidence.
+
+API INTEGRATION:
+- Distinguish incoming Express routes from outgoing external API calls.
+- An Express route alone does not prove external API integration.
+- Look for fetch(), axios, HTTP client requests, request URLs,
+  headers, authentication, response handling, and error handling.
+- If a supplied file calls an external API, describe that concrete
+  behavior and cite its exact file path.
+- An outgoing fetch() request to an external service is evidence
+  of API consumption. Evaluate depth based on the supplied code.
+
+JAVASCRIPT COMPETENCIES:
+- Variables and data types: identify concrete declarations and values.
+- Functions: identify actual functions and their responsibilities.
+- Arrays and objects: identify actual creation, access, or manipulation.
+- DOM manipulation: require browser DOM-related code.
+- Asynchronous programming: identify async functions and await usage.
+- Promises and async/await: identify actual asynchronous operations.
+- ES6+ features: cite specific syntax or language features.
+- Do not penalize a backend project for lacking frontend functionality.
+- Report competencies not demonstrated as insufficient evidence.
+
+STRENGTHS AND CONSISTENCY:
+- Include strengths when the supplied evidence supports them.
+- Do not leave strengths empty when clear, specific strengths exist.
+- Every score must agree with its explanation.
+- Avoid repeating the same generic explanation across competencies.
+- Include every supplied competency exactly once.
 
 OVERALL SCORE:
-Calculate overallEvidenceScore as the arithmetic mean of all competency
-scores, rounded to the nearest whole number. Include every competency
-exactly once. Do not manually inflate or reduce the result.
+Return an integer overallEvidenceScore as your best estimate of the
+arithmetic mean of all competency scores. The backend will calculate
+the authoritative overall score independently.
 
 Return only valid JSON using exactly this structure:
 {
@@ -199,13 +410,21 @@ OUTPUT REQUIREMENTS:
       throw new AppError("AI returned an empty response", 502);
     }
 
-    let analysis;
+    let rawAnalysis;
 
     try {
-      analysis = JSON.parse(content);
+      rawAnalysis = JSON.parse(content);
     } catch {
       throw new AppError("AI returned invalid JSON", 502);
     }
+
+    // Validate the competencies and override the AI's overall score.
+    const analysis = validateAndNormalizeAnalysis(rawAnalysis, skill);
+
+    console.log(
+      "[Proovix AI] Calculated overall evidence score:",
+      analysis.overallEvidenceScore
+    );
 
     return analysis;
   } catch (error) {

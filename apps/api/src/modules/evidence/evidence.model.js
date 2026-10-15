@@ -31,6 +31,22 @@ const evidenceSchema = new mongoose.Schema(
       required: true,
     },
 
+    reviewedBy: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "User",
+  default: null,
+},
+reviewedAt: {
+  type: Date,
+  default: null,
+},
+reviewNote: {
+  type: String,
+  trim: true,
+  maxlength: 1000,
+  default: "",
+},
+
     // Name/title of the evidence
     title: {
       type: String,
