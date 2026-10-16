@@ -6,7 +6,6 @@ const {
 const Candidate = require("../candidates/candidate.model");
 const CandidateSkill = require("../skills/candidateSkill.model");
 const Evidence = require("./evidence.model");
-
 const AppError = require("../../core/errors/AppError");
 
 const SKILL_POPULATE = {
@@ -17,12 +16,9 @@ const SKILL_POPULATE = {
   },
 };
 
-// Recalculate the candidate skill score from all analyzed evidence.
-// Rejected evidence is excluded from the calculation.
+// Recalculate the aggregate score, excluding rejected evidence.
 const recalculateCandidateSkillScore = async (candidateSkillId) => {
-  const candidateSkill = await CandidateSkill.findById(
-    candidateSkillId
-  );
+  const candidateSkill = await CandidateSkill.findById(candidateSkillId);
 
   if (!candidateSkill) {
     throw new AppError("Candidate skill not found", 404);
@@ -44,41 +40,31 @@ const recalculateCandidateSkillScore = async (candidateSkillId) => {
         score <= 100
     );
 
-  const averageScore =
-    validScores.length > 0
-      ? Math.round(
-          validScores.reduce((total, score) => total + score, 0) /
-            validScores.length
-        )
-      : 0;
+  candidateSkill.confidenceScore = validScores.length
+    ? Math.round(
+        validScores.reduce((sum, score) => sum + score, 0) /
+          validScores.length
+      )
+    : 0;
 
-  candidateSkill.confidenceScore = averageScore;
-
-  // AI analysis never automatically verifies a skill.
-  // Preserve any existing VERIFIED or REJECTED decision.
+  // AI analysis must never automatically verify a skill.
   if (
     candidateSkill.verificationStatus !== "VERIFIED" &&
     candidateSkill.verificationStatus !== "REJECTED"
   ) {
-    candidateSkill.verificationStatus =
-      validScores.length > 0 ? "PENDING" : "UNVERIFIED";
+    candidateSkill.verificationStatus = validScores.length
+      ? "PENDING"
+      : "UNVERIFIED";
   }
 
   await candidateSkill.save();
-
   return candidateSkill;
 };
 
-// Create evidence for a candidate skill
+// Create evidence for a candidate skill.
 const createEvidence = async (
   userId,
-  {
-    candidateSkillId,
-    type,
-    title,
-    description,
-    sourceUrl,
-  }
+  { candidateSkillId, type, title, description, sourceUrl }
 ) => {
   const candidate = await Candidate.findOne({ userId });
 
@@ -108,7 +94,7 @@ const createEvidence = async (
     throw new AppError("Invalid evidence type", 400);
   }
 
-  const evidence = await Evidence.create({
+  return Evidence.create({
     candidateId: candidate._id,
     candidateSkillId: candidateSkill._id,
     type,
@@ -116,11 +102,9 @@ const createEvidence = async (
     description,
     sourceUrl,
   });
-
-  return evidence;
 };
 
-// Get all evidence belonging to the current candidate
+// Get all evidence belonging to the current candidate.
 const getCandidateEvidence = async (userId) => {
   const candidate = await Candidate.findOne({ userId });
 
@@ -128,14 +112,12 @@ const getCandidateEvidence = async (userId) => {
     throw new AppError("Candidate profile not found", 404);
   }
 
-  return Evidence.find({
-    candidateId: candidate._id,
-  })
+  return Evidence.find({ candidateId: candidate._id })
     .populate(SKILL_POPULATE)
     .sort({ createdAt: -1 });
 };
 
-// Get one specific evidence item
+// Get one evidence item belonging to the current candidate.
 const getEvidenceById = async (userId, evidenceId) => {
   const candidate = await Candidate.findOne({ userId });
 
@@ -155,7 +137,7 @@ const getEvidenceById = async (userId, evidenceId) => {
   return evidence;
 };
 
-// Remove evidence and recalculate the linked skill score
+// Delete evidence and recalculate its skill score.
 const removeEvidence = async (userId, evidenceId) => {
   const candidate = await Candidate.findOne({ userId });
 
@@ -175,13 +157,12 @@ const removeEvidence = async (userId, evidenceId) => {
   const candidateSkillId = evidence.candidateSkillId;
 
   await Evidence.findByIdAndDelete(evidence._id);
-
   await recalculateCandidateSkillScore(candidateSkillId);
 
   return evidence;
 };
 
-// Analyze evidence and update the linked candidate skill
+// Analyze evidence using AI.
 const analyzeEvidence = async (userId, evidenceId) => {
   const candidate = await Candidate.findOne({ userId });
 
@@ -198,6 +179,13 @@ const analyzeEvidence = async (userId, evidenceId) => {
     throw new AppError("Evidence not found", 404);
   }
 
+  if (evidence.verificationStatus === "REJECTED") {
+    throw new AppError(
+      "Rejected evidence cannot be analyzed. Submit new evidence instead.",
+      400
+    );
+  }
+
   const candidateSkill = evidence.candidateSkillId;
   const skill = candidateSkill?.skillId;
 
@@ -208,12 +196,8 @@ const analyzeEvidence = async (userId, evidenceId) => {
     );
   }
 
-  const analysis = await analyzeEvidenceWithAI({
-    evidence,
-    skill,
-  });
+  const analysis = await analyzeEvidenceWithAI({ evidence, skill });
 
-  // Validate the returned analysis structure.
   if (
     !analysis ||
     typeof analysis.summary !== "string" ||
@@ -224,10 +208,7 @@ const analyzeEvidence = async (userId, evidenceId) => {
     analysis.overallEvidenceScore < 0 ||
     analysis.overallEvidenceScore > 100
   ) {
-    throw new AppError(
-      "AI returned an invalid analysis structure",
-      502
-    );
+    throw new AppError("AI returned an invalid analysis structure", 502);
   }
 
   for (const item of analysis.competencies) {
@@ -243,12 +224,8 @@ const analyzeEvidence = async (userId, evidenceId) => {
   }
 
   if (
-    !analysis.strengths.every(
-      (item) => typeof item === "string"
-    ) ||
-    !analysis.missingEvidence.every(
-      (item) => typeof item === "string"
-    )
+    !analysis.strengths.every((item) => typeof item === "string") ||
+    !analysis.missingEvidence.every((item) => typeof item === "string")
   ) {
     throw new AppError(
       "AI returned invalid strengths or evidence gaps",
@@ -256,21 +233,51 @@ const analyzeEvidence = async (userId, evidenceId) => {
     );
   }
 
-  // Save the evidence-level analysis.
   evidence.aiAnalysis = analysis;
   evidence.confidenceScore = analysis.overallEvidenceScore;
+  await evidence.save();
+
+  await recalculateCandidateSkillScore(candidateSkill._id);
+
+  return Evidence.findById(evidence._id).populate(SKILL_POPULATE);
+};
+
+// Admin/reviewer approves or rejects evidence.
+const reviewEvidence = async (
+  reviewerUserId,
+  evidenceId,
+  { status, reviewNote = "" }
+) => {
+  if (!["VERIFIED", "REJECTED"].includes(status)) {
+    throw new AppError(
+      "Review status must be VERIFIED or REJECTED",
+      400
+    );
+  }
+
+  if (typeof reviewNote !== "string" || reviewNote.length > 1000) {
+    throw new AppError("Review note must be 1000 characters or fewer", 400);
+  }
+
+  const evidence = await Evidence.findById(evidenceId);
+
+  if (!evidence) {
+    throw new AppError("Evidence not found", 404);
+  }
+
+  const candidateSkillId = evidence.candidateSkillId;
+
+  evidence.verificationStatus = status;
+  evidence.reviewedBy = reviewerUserId;
+  evidence.reviewedAt = new Date();
+  evidence.reviewNote = reviewNote.trim();
+  evidence.verifiedAt = status === "VERIFIED" ? new Date() : null;
 
   await evidence.save();
 
-  // Update the skill's aggregate score using all its analyzed evidence.
-  await recalculateCandidateSkillScore(candidateSkill._id);
+  await recalculateCandidateSkillScore(candidateSkillId);
 
-  // Fetch again so the response includes the updated CandidateSkill.
-  const updatedEvidence = await Evidence.findById(
-    evidence._id
-  ).populate(SKILL_POPULATE);
-
-  return updatedEvidence;
+  return Evidence.findById(evidence._id).populate(SKILL_POPULATE);
 };
 
 module.exports = {
@@ -279,4 +286,5 @@ module.exports = {
   getEvidenceById,
   removeEvidence,
   analyzeEvidence,
+  reviewEvidence,
 };

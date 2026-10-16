@@ -1,6 +1,8 @@
 const express = require("express");
 
 const authMiddleware = require("../../core/middleware/authMiddleware");
+const authorizeRoles = require("../../core/middleware/authorizeRoles");
+
 
 const {
   create,
@@ -8,7 +10,9 @@ const {
   getOne,
   remove,
   analyze,
+  review,
 } = require("./evidence.controller");
+
 
 const router = express.Router();
 
@@ -21,6 +25,13 @@ router.use(authMiddleware);
 router.post("/", create);
 
 router.post("/:evidenceId/analyze", analyze);
+
+router.patch(
+  "/:evidenceId/review",
+  authorizeRoles("ADMIN", "REVIEWER"),
+  review
+);
+
 
 
 // Get all evidence
