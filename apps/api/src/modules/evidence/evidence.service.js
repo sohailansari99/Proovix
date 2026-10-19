@@ -25,6 +25,7 @@ const SKILL_POPULATE = {
 };
 
 // Recalculate a candidate skill's score and verification status.
+
 const recalculateCandidateSkillScore = async (candidateSkillId) => {
   const candidateSkill = await CandidateSkill.findById(candidateSkillId);
 
@@ -36,6 +37,7 @@ const recalculateCandidateSkillScore = async (candidateSkillId) => {
     candidateSkillId: candidateSkill._id,
   }).select("verificationStatus confidenceScore aiAnalysis");
 
+  // Only analyzed, non-rejected evidence contributes to the score.
   const analyzedEvidence = allEvidence.filter(
     (item) =>
       item.verificationStatus !== "REJECTED" &&
@@ -64,17 +66,21 @@ const recalculateCandidateSkillScore = async (candidateSkillId) => {
     (item) => item.verificationStatus === "VERIFIED"
   );
 
-  const hasAnalyzedPendingEvidence = allEvidence.some(
-    (item) =>
-      item.verificationStatus === "PENDING" &&
-      item.aiAnalysis !== null &&
-      item.aiAnalysis !== undefined
+  const hasPendingEvidence = allEvidence.some(
+    (item) => item.verificationStatus === "PENDING"
   );
 
-  if (hasVerifiedEvidence) {
-    candidateSkill.verificationStatus = "VERIFIED";
-  } else if (hasAnalyzedPendingEvidence) {
+  const hasRejectedEvidence = allEvidence.some(
+    (item) => item.verificationStatus === "REJECTED"
+  );
+
+  // Pending evidence takes priority while review is outstanding.
+  if (hasPendingEvidence) {
     candidateSkill.verificationStatus = "PENDING";
+  } else if (hasVerifiedEvidence) {
+    candidateSkill.verificationStatus = "VERIFIED";
+  } else if (hasRejectedEvidence) {
+    candidateSkill.verificationStatus = "REJECTED";
   } else {
     candidateSkill.verificationStatus = "UNVERIFIED";
   }
@@ -83,6 +89,7 @@ const recalculateCandidateSkillScore = async (candidateSkillId) => {
 
   return candidateSkill;
 };
+
 
 // Create evidence for an active skill belonging to the candidate.
 const createEvidence = async (
