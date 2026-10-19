@@ -6,6 +6,7 @@ const authorizeRoles = require("../../core/middleware/authorizeRoles");
 
 const {
   create,
+  update,
   getAll,
   getOne,
   remove,
@@ -25,6 +26,7 @@ router.use(authMiddleware);
 router.post("/", create);
 
 router.post("/:evidenceId/analyze", analyze);
+router.patch("/:evidenceId", update);
 
 router.patch(
   "/:evidenceId/review",

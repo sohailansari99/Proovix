@@ -1,5 +1,6 @@
 const {
   createEvidence,
+  updateEvidence,
   getCandidateEvidence,
   getEvidenceById,
   removeEvidence,
@@ -60,6 +61,29 @@ const create = async (req, res, next) => {
     next(error);
   }
 };
+
+
+const update = async (req, res, next) => {
+  try {
+    const { evidenceId } = req.params;
+
+    const evidence = await updateEvidence(
+      req.user.userId,
+      evidenceId,
+      req.body
+    );
+
+    return sendSuccess(
+      res,
+      200,
+      "Evidence updated successfully. Please run AI analysis again.",
+      evidence
+    );
+  } catch (error) {
+    next(error);
+  }
+};
+
 
 
 // Get all candidate evidence
@@ -199,6 +223,7 @@ const review = async (req, res, next) => {
 
 module.exports = {
   create,
+  update,
   getAll,
   getOne,
   remove,

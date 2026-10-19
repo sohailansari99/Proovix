@@ -8,6 +8,14 @@ const CandidateSkill = require("../skills/candidateSkill.model");
 const Evidence = require("./evidence.model");
 const AppError = require("../../core/errors/AppError");
 
+const ALLOWED_EVIDENCE_TYPES = [
+  "PROJECT",
+  "GITHUB",
+  "ASSESSMENT",
+  "CERTIFICATE",
+  "INTERNSHIP",
+];
+
 const SKILL_POPULATE = {
   path: "candidateSkillId",
   populate: {
@@ -16,7 +24,7 @@ const SKILL_POPULATE = {
   },
 };
 
-// Recalculate the aggregate score, excluding rejected evidence.
+// Recalculate a candidate skill's score and verification status.
 const recalculateCandidateSkillScore = async (candidateSkillId) => {
   const candidateSkill = await CandidateSkill.findById(candidateSkillId);
 
@@ -24,11 +32,16 @@ const recalculateCandidateSkillScore = async (candidateSkillId) => {
     throw new AppError("Candidate skill not found", 404);
   }
 
-  const analyzedEvidence = await Evidence.find({
+  const allEvidence = await Evidence.find({
     candidateSkillId: candidateSkill._id,
-    aiAnalysis: { $ne: null },
-    verificationStatus: { $ne: "REJECTED" },
-  }).select("confidenceScore");
+  }).select("verificationStatus confidenceScore aiAnalysis");
+
+  const analyzedEvidence = allEvidence.filter(
+    (item) =>
+      item.verificationStatus !== "REJECTED" &&
+      item.aiAnalysis !== null &&
+      item.aiAnalysis !== undefined
+  );
 
   const validScores = analyzedEvidence
     .map((item) => item.confidenceScore)
@@ -47,21 +60,31 @@ const recalculateCandidateSkillScore = async (candidateSkillId) => {
       )
     : 0;
 
-  // AI analysis must never automatically verify a skill.
-  if (
-    candidateSkill.verificationStatus !== "VERIFIED" &&
-    candidateSkill.verificationStatus !== "REJECTED"
-  ) {
-    candidateSkill.verificationStatus = validScores.length
-      ? "PENDING"
-      : "UNVERIFIED";
+  const hasVerifiedEvidence = allEvidence.some(
+    (item) => item.verificationStatus === "VERIFIED"
+  );
+
+  const hasAnalyzedPendingEvidence = allEvidence.some(
+    (item) =>
+      item.verificationStatus === "PENDING" &&
+      item.aiAnalysis !== null &&
+      item.aiAnalysis !== undefined
+  );
+
+  if (hasVerifiedEvidence) {
+    candidateSkill.verificationStatus = "VERIFIED";
+  } else if (hasAnalyzedPendingEvidence) {
+    candidateSkill.verificationStatus = "PENDING";
+  } else {
+    candidateSkill.verificationStatus = "UNVERIFIED";
   }
 
   await candidateSkill.save();
+
   return candidateSkill;
 };
 
-// Create evidence for a candidate skill.
+// Create evidence for an active skill belonging to the candidate.
 const createEvidence = async (
   userId,
   { candidateSkillId, type, title, description, sourceUrl }
@@ -79,29 +102,55 @@ const createEvidence = async (
   });
 
   if (!candidateSkill) {
-    throw new AppError("Candidate skill not found", 404);
+    throw new AppError("Active candidate skill not found", 404);
   }
 
-  const allowedTypes = [
-    "PROJECT",
-    "GITHUB",
-    "ASSESSMENT",
-    "CERTIFICATE",
-    "INTERNSHIP",
-  ];
-
-  if (!allowedTypes.includes(type)) {
+  if (!ALLOWED_EVIDENCE_TYPES.includes(type)) {
     throw new AppError("Invalid evidence type", 400);
   }
 
-  return Evidence.create({
+  if (
+    typeof title !== "string" ||
+    !title.trim() ||
+    title.trim().length > 150
+  ) {
+    throw new AppError(
+      "Title is required and must be 150 characters or fewer",
+      400
+    );
+  }
+
+  if (
+    description !== undefined &&
+    (typeof description !== "string" || description.length > 2000)
+  ) {
+    throw new AppError(
+      "Description must be 2000 characters or fewer",
+      400
+    );
+  }
+
+  if (
+    sourceUrl !== undefined &&
+    typeof sourceUrl !== "string"
+  ) {
+    throw new AppError("Source URL must be a string", 400);
+  }
+
+  const evidence = await Evidence.create({
     candidateId: candidate._id,
     candidateSkillId: candidateSkill._id,
     type,
-    title,
-    description,
-    sourceUrl,
+    title: title.trim(),
+    description:
+      typeof description === "string" ? description.trim() : "",
+    sourceUrl:
+      typeof sourceUrl === "string" ? sourceUrl.trim() : "",
   });
+
+  await recalculateCandidateSkillScore(candidateSkill._id);
+
+  return Evidence.findById(evidence._id).populate(SKILL_POPULATE);
 };
 
 // Get all evidence belonging to the current candidate.
@@ -137,7 +186,93 @@ const getEvidenceById = async (userId, evidenceId) => {
   return evidence;
 };
 
-// Delete evidence and recalculate its skill score.
+// Update evidence submitted by its owner.
+const updateEvidence = async (
+  userId,
+  evidenceId,
+  { type, title, description, sourceUrl }
+) => {
+  const candidate = await Candidate.findOne({ userId });
+
+  if (!candidate) {
+    throw new AppError("Candidate profile not found", 404);
+  }
+
+  const evidence = await Evidence.findOne({
+    _id: evidenceId,
+    candidateId: candidate._id,
+  });
+
+  if (!evidence) {
+    throw new AppError("Evidence not found", 404);
+  }
+
+  if (evidence.verificationStatus === "VERIFIED") {
+    throw new AppError("Verified evidence cannot be edited", 400);
+  }
+
+  if (type !== undefined) {
+    if (!ALLOWED_EVIDENCE_TYPES.includes(type)) {
+      throw new AppError("Invalid evidence type", 400);
+    }
+
+    evidence.type = type;
+  }
+
+  if (title !== undefined) {
+    if (
+      typeof title !== "string" ||
+      !title.trim() ||
+      title.trim().length > 150
+    ) {
+      throw new AppError(
+        "Title is required and must be 150 characters or fewer",
+        400
+      );
+    }
+
+    evidence.title = title.trim();
+  }
+
+  if (description !== undefined) {
+    if (
+      typeof description !== "string" ||
+      description.length > 2000
+    ) {
+      throw new AppError(
+        "Description must be 2000 characters or fewer",
+        400
+      );
+    }
+
+    evidence.description = description.trim();
+  }
+
+  if (sourceUrl !== undefined) {
+    if (typeof sourceUrl !== "string") {
+      throw new AppError("Source URL must be a string", 400);
+    }
+
+    evidence.sourceUrl = sourceUrl.trim();
+  }
+
+  // Editing invalidates the previous analysis and review.
+  evidence.aiAnalysis = null;
+  evidence.confidenceScore = 0;
+  evidence.verificationStatus = "PENDING";
+  evidence.verifiedAt = null;
+  evidence.reviewedBy = null;
+  evidence.reviewedAt = null;
+  evidence.reviewNote = "";
+
+  await evidence.save();
+
+  await recalculateCandidateSkillScore(evidence.candidateSkillId);
+
+  return Evidence.findById(evidence._id).populate(SKILL_POPULATE);
+};
+
+// Delete evidence and recalculate the associated skill.
 const removeEvidence = async (userId, evidenceId) => {
   const candidate = await Candidate.findOne({ userId });
 
@@ -157,6 +292,7 @@ const removeEvidence = async (userId, evidenceId) => {
   const candidateSkillId = evidence.candidateSkillId;
 
   await Evidence.findByIdAndDelete(evidence._id);
+
   await recalculateCandidateSkillScore(candidateSkillId);
 
   return evidence;
@@ -235,6 +371,7 @@ const analyzeEvidence = async (userId, evidenceId) => {
 
   evidence.aiAnalysis = analysis;
   evidence.confidenceScore = analysis.overallEvidenceScore;
+
   await evidence.save();
 
   await recalculateCandidateSkillScore(candidateSkill._id);
@@ -242,7 +379,7 @@ const analyzeEvidence = async (userId, evidenceId) => {
   return Evidence.findById(evidence._id).populate(SKILL_POPULATE);
 };
 
-// Admin/reviewer approves or rejects evidence.
+// Reviewer approves or rejects evidence.
 const reviewEvidence = async (
   reviewerUserId,
   evidenceId,
@@ -256,7 +393,10 @@ const reviewEvidence = async (
   }
 
   if (typeof reviewNote !== "string" || reviewNote.length > 1000) {
-    throw new AppError("Review note must be 1000 characters or fewer", 400);
+    throw new AppError(
+      "Review note must be 1000 characters or fewer",
+      400
+    );
   }
 
   const evidence = await Evidence.findById(evidenceId);
@@ -282,6 +422,7 @@ const reviewEvidence = async (
 
 module.exports = {
   createEvidence,
+  updateEvidence,
   getCandidateEvidence,
   getEvidenceById,
   removeEvidence,
