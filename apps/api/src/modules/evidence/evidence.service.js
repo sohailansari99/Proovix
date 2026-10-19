@@ -38,9 +38,11 @@ const recalculateCandidateSkillScore = async (candidateSkillId) => {
   }).select("verificationStatus confidenceScore aiAnalysis");
 
   // Only analyzed, non-rejected evidence contributes to the score.
+  // Only analyzed, non-rejected evidence contributes to the score.
+  // Only analyzed and human-verified evidence contributes to the skill score.
   const analyzedEvidence = allEvidence.filter(
     (item) =>
-      item.verificationStatus !== "REJECTED" &&
+      item.verificationStatus === "VERIFIED" &&
       item.aiAnalysis !== null &&
       item.aiAnalysis !== undefined
   );
@@ -57,9 +59,9 @@ const recalculateCandidateSkillScore = async (candidateSkillId) => {
 
   candidateSkill.confidenceScore = validScores.length
     ? Math.round(
-        validScores.reduce((sum, score) => sum + score, 0) /
-          validScores.length
-      )
+      validScores.reduce((sum, score) => sum + score, 0) /
+      validScores.length
+    )
     : 0;
 
   const hasVerifiedEvidence = allEvidence.some(
