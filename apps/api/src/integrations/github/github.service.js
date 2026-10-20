@@ -49,7 +49,6 @@ const parseGitHubUrl = (repositoryUrl) => {
   return { owner, repo };
 };
 
-
 const githubRequest = async (endpoint) => {
   let response;
 
@@ -83,7 +82,9 @@ const githubRequest = async (endpoint) => {
     const reset = response.headers.get("x-ratelimit-reset");
 
     if (remaining === "0" && reset) {
-      const resetTime = new Date(Number(reset) * 1000).toISOString();
+      const resetTime = new Date(
+        Number(reset) * 1000
+      ).toISOString();
 
       throw new AppError(
         `GitHub API rate limit reached. Reset time: ${resetTime}`,
@@ -101,10 +102,14 @@ const githubRequest = async (endpoint) => {
     throw new AppError("GitHub API request failed", 502);
   }
 
-  return response.json();
+  try {
+    return await response.json();
+  } catch {
+    throw new AppError("GitHub returned an invalid response", 502);
+  }
 };
 
-const getRepositoryEvidence = async (repositoryUrl) => {
+const validateRepositoryUrl = (repositoryUrl) => {
   if (
     typeof repositoryUrl !== "string" ||
     !repositoryUrl.trim()
@@ -112,7 +117,10 @@ const getRepositoryEvidence = async (repositoryUrl) => {
     throw new AppError("GitHub repository URL is required", 400);
   }
 
-  const { owner, repo } = parseGitHubUrl(repositoryUrl.trim());
+  return parseGitHubUrl(repositoryUrl.trim());
+};
+
+const getPublicRepository = async (owner, repo) => {
   const encodedOwner = encodeURIComponent(owner);
   const encodedRepo = encodeURIComponent(repo);
 
@@ -127,6 +135,22 @@ const getRepositoryEvidence = async (repositoryUrl) => {
     );
   }
 
+  return {
+    repository,
+    encodedOwner,
+    encodedRepo,
+  };
+};
+
+const getRepositoryEvidence = async (repositoryUrl) => {
+  const { owner, repo } = validateRepositoryUrl(repositoryUrl);
+
+  const {
+    repository,
+    encodedOwner,
+    encodedRepo,
+  } = await getPublicRepository(owner, repo);
+
   let readme = "";
 
   try {
@@ -136,7 +160,7 @@ const getRepositoryEvidence = async (repositoryUrl) => {
 
     if (
       readmeData.encoding === "base64" &&
-      readmeData.content
+      typeof readmeData.content === "string"
     ) {
       readme = Buffer.from(
         readmeData.content,
@@ -165,17 +189,96 @@ const getRepositoryEvidence = async (repositoryUrl) => {
   };
 };
 
+const ignoredDirectories = new Set([
+  "node_modules",
+  "dist",
+  "build",
+  "coverage",
+  ".git",
+  "vendor",
+  ".next",
+  "out",
+  "public",
+]);
+
+const allowedExtensions = /\.(js|cjs|mjs|jsx)$/i;
+
+const shouldIgnoreFile = (filePath) => {
+  const normalizedPath = filePath.replace(/\\/g, "/");
+  const segments = normalizedPath.split("/");
+  const fileName = segments[segments.length - 1];
+
+  const hasIgnoredDirectory = segments
+    .slice(0, -1)
+    .some((segment) => ignoredDirectories.has(segment));
+
+  const hasTestDirectory = segments
+    .slice(0, -1)
+    .some((segment) =>
+      /^(test|tests|__tests__|__mocks__)$/i.test(segment)
+    );
+
+  const isTestFile =
+    /\.(test|spec)\.(js|cjs|mjs|jsx)$/i.test(fileName);
+
+  const isGeneratedFile =
+    /\.d\.(js|cjs|mjs|jsx)$/i.test(fileName) ||
+    /\.min\.(js|cjs|mjs|jsx)$/i.test(fileName);
+
+  return (
+    hasIgnoredDirectory ||
+    hasTestDirectory ||
+    isTestFile ||
+    isGeneratedFile
+  );
+};
+
+const priorityForPath = (filePath) => {
+  const normalizedPath = `/${filePath.replace(/\\/g, "/")}`;
+
+  // External service integrations.
+  if (/\/integrations?\//i.test(normalizedPath)) {
+    return 0;
+  }
+
+  // Core application features.
+  if (/\/modules\/evidence\//i.test(normalizedPath)) {
+    return 1;
+  }
+
+  if (/\/modules\/skills\//i.test(normalizedPath)) {
+    return 2;
+  }
+
+  if (/\/modules\/candidates\//i.test(normalizedPath)) {
+    return 3;
+  }
+
+  if (/\/modules\/(auth|users)\//i.test(normalizedPath)) {
+    return 4;
+  }
+
+  // Common backend architecture.
+  if (
+    /\/(controllers?|services?|models?|routes?)\//i.test(
+      normalizedPath
+    )
+  ) {
+    return 5;
+  }
+
+  // Shared infrastructure.
+  if (/\/(core|config)\//i.test(normalizedPath)) {
+    return 6;
+  }
+
+  return 7;
+};
+
 const getRepositorySourceFiles = async (
   repositoryUrl,
   maxFiles = 8
 ) => {
-  if (
-    typeof repositoryUrl !== "string" ||
-    !repositoryUrl.trim()
-  ) {
-    throw new AppError("GitHub repository URL is required", 400);
-  }
-
   if (
     !Number.isInteger(maxFiles) ||
     maxFiles < 1 ||
@@ -187,26 +290,26 @@ const getRepositorySourceFiles = async (
     );
   }
 
-  const { owner, repo } = parseGitHubUrl(repositoryUrl.trim());
-  const encodedOwner = encodeURIComponent(owner);
-  const encodedRepo = encodeURIComponent(repo);
+  const { owner, repo } = validateRepositoryUrl(repositoryUrl);
 
-  const repository = await githubRequest(
-    `/repos/${encodedOwner}/${encodedRepo}`
-  );
-
-  if (repository.private || repository.disabled) {
-    throw new AppError(
-      "This repository is not available for public analysis",
-      400
-    );
-  }
+  const {
+    repository,
+    encodedOwner,
+    encodedRepo,
+  } = await getPublicRepository(owner, repo);
 
   const branch = encodeURIComponent(repository.default_branch);
 
   const tree = await githubRequest(
     `/repos/${encodedOwner}/${encodedRepo}/git/trees/${branch}?recursive=1`
   );
+
+  if (!Array.isArray(tree.tree)) {
+    throw new AppError(
+      "GitHub returned an invalid repository file tree",
+      502
+    );
+  }
 
   if (tree.truncated) {
     throw new AppError(
@@ -215,47 +318,15 @@ const getRepositorySourceFiles = async (
     );
   }
 
-  const ignoredDirectories = [
-    "node_modules/",
-    "dist/",
-    "build/",
-    "coverage/",
-    ".git/",
-    "vendor/",
-  ];
-
-  const allowedExtensions = /\.(js|cjs|mjs|jsx)$/i;
-
- 
-const priorityForPath = (filePath) => {
-  // External service integrations are important evidence.
-  if (/\/integrations\//i.test(`/${filePath}`)) return 0;
-
-  // Core application features.
-  if (/\/modules\/evidence\//i.test(`/${filePath}`)) return 1;
-  if (/\/modules\/skills\//i.test(`/${filePath}`)) return 2;
-  if (/\/modules\/candidates\//i.test(`/${filePath}`)) return 3;
-  if (/\/modules\/(auth|users)\//i.test(`/${filePath}`)) return 4;
-
-  // Common backend architecture.
-  if (/\/(controllers?|services?|models?|routes?)\//i.test(`/${filePath}`)) return 5;
-
-  // Shared infrastructure.
-  if (/\/(core|config)\//i.test(`/${filePath}`)) return 6;
-
-  return 7;
-};
-
   const files = tree.tree
     .filter(
       (item) =>
         item.type === "blob" &&
         typeof item.size === "number" &&
+        item.size > 0 &&
         item.size <= 100000 &&
         allowedExtensions.test(item.path) &&
-        !ignoredDirectories.some((dir) =>
-          item.path.startsWith(dir)
-        )
+        !shouldIgnoreFile(item.path)
     )
     .sort((a, b) => {
       const priorityDifference =

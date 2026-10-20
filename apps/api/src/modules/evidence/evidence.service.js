@@ -308,6 +308,7 @@ const removeEvidence = async (userId, evidenceId) => {
 };
 
 // Analyze evidence using AI.
+
 const analyzeEvidence = async (userId, evidenceId) => {
   const candidate = await Candidate.findOne({ userId });
 
@@ -341,8 +342,10 @@ const analyzeEvidence = async (userId, evidenceId) => {
     );
   }
 
+  // Generate a fresh AI analysis.
   const analysis = await analyzeEvidenceWithAI({ evidence, skill });
 
+  // Validate the AI response.
   if (
     !analysis ||
     typeof analysis.summary !== "string" ||
@@ -378,15 +381,27 @@ const analyzeEvidence = async (userId, evidenceId) => {
     );
   }
 
+  // Store the latest successful AI analysis.
   evidence.aiAnalysis = analysis;
   evidence.confidenceScore = analysis.overallEvidenceScore;
 
+  // A previous approval applies to the old analysis, not this new one.
+  if (evidence.verificationStatus === "VERIFIED") {
+    evidence.verificationStatus = "PENDING";
+    evidence.verifiedAt = null;
+    evidence.reviewedBy = null;
+    evidence.reviewedAt = null;
+    evidence.reviewNote = "";
+  }
+
   await evidence.save();
 
+  // Recalculate the skill score using eligible verified evidence.
   await recalculateCandidateSkillScore(candidateSkill._id);
 
   return Evidence.findById(evidence._id).populate(SKILL_POPULATE);
 };
+
 
 // Reviewer approves or rejects evidence.
 const reviewEvidence = async (
