@@ -1,5 +1,4 @@
 const crypto = require("crypto");
-const bcrypt = require("bcrypt");
 
 const EmailVerification = require("./emailVerification.model");
 const User = require("../users/user.model");
@@ -10,137 +9,106 @@ const {
 
 const AppError = require("../../core/errors/AppError");
 
-const generateVerificationCode = () => {
-  return crypto.randomInt(100000, 1000000).toString();
+const LINK_LIFETIME_MS = 24 * 60 * 60 * 1000; // 24 hours
+const RESEND_COOLDOWN_MS = 60 * 1000; // 1 minute
+
+const hashToken = (token) =>
+  crypto.createHash("sha256").update(token).digest("hex");
+
+const buildVerificationUrl = (token) => {
+  const baseUrl = (
+    process.env.FRONTEND_URL || "http://localhost:5173"
+  ).replace(/\/$/, "");
+
+  return `${baseUrl}/?verify=${token}`;
 };
 
-const createVerificationCode = async (userId, email) => {
-  const code = generateVerificationCode();
-
-  const codeHash = await bcrypt.hash(code, 12);
-
-  const expiresAt = new Date(
-    Date.now() + 10 * 60 * 1000
-  );
+const createVerificationLink = async (userId, email) => {
+  // Long random token that cannot be guessed
+  const token = crypto.randomBytes(32).toString("hex");
 
   await EmailVerification.findOneAndUpdate(
     { userId },
     {
       userId,
-      codeHash,
-      expiresAt,
-      attempts: 0,
+      tokenHash: hashToken(token),
+      expiresAt: new Date(Date.now() + LINK_LIFETIME_MS),
     },
-    {
-      upsert: true,
-      new: true,
-    }
+    { upsert: true, new: true }
   );
 
-  await sendVerificationEmail(email, code);
+  const verificationUrl = buildVerificationUrl(token);
+
+  // Handy while developing: you can click the link from the terminal
+  if (process.env.NODE_ENV !== "production") {
+    console.log(`[dev] Verification link for ${email}: ${verificationUrl}`);
+  }
+
+  await sendVerificationEmail(email, verificationUrl);
 };
 
-const verifyEmailCode = async (userId, code) => {
+// Returns the userId that the token belongs to, and consumes the token.
+const verifyEmailToken = async (token) => {
   const verification = await EmailVerification.findOne({
-    userId,
+    tokenHash: hashToken(token),
   });
 
   if (!verification) {
     throw new AppError(
-      "Verification code not found",
-      404
+      "This verification link is invalid or has already been used",
+      400
     );
   }
 
   if (verification.expiresAt < new Date()) {
-    await EmailVerification.deleteOne({ userId });
+    await EmailVerification.deleteOne({ _id: verification._id });
 
     throw new AppError(
-      "Verification code has expired",
+      "This verification link has expired. Please request a new one",
       400
     );
   }
 
-  if (verification.attempts >= 5) {
-    await EmailVerification.deleteOne({ userId });
+  const userId = verification.userId;
 
-    throw new AppError(
-      "Too many verification attempts. Please request a new code.",
-      429
-    );
-  }
+  await EmailVerification.deleteOne({ _id: verification._id });
 
-  const isValid = await bcrypt.compare(
-    code,
-    verification.codeHash
-  );
-
-  if (!isValid) {
-    verification.attempts += 1;
-
-    await verification.save();
-
-    throw new AppError(
-      "Invalid verification code",
-      400
-    );
-  }
-
-  await EmailVerification.deleteOne({ userId });
-
-  return true;
+  return userId;
 };
 
-const resendVerificationCode = async (email) => {
-  // Find user
+const resendVerificationLink = async (email) => {
   const user = await User.findOne({ email });
 
   // Don't reveal whether the email exists
-  if (!user) {
-    return;
-  }
+  if (!user) return;
 
-  // Don't send another code if email is already verified
-  if (user.emailVerified) {
-    return;
-  }
+  // Nothing to send if already verified
+  if (user.emailVerified) return;
 
-  // Find existing verification record
-  const existingVerification =
-    await EmailVerification.findOne({
-      userId: user._id,
-    });
+  const existing = await EmailVerification.findOne({ userId: user._id });
 
-  // Prevent repeated email requests
-  if (existingVerification) {
-    const cooldown =
-      60 * 1000;
+  if (existing) {
+    const elapsed = Date.now() - existing.updatedAt.getTime();
 
-    const timeSinceLastRequest =
-      Date.now() -
-      existingVerification.updatedAt.getTime();
-
-    if (timeSinceLastRequest < cooldown) {
+    if (elapsed < RESEND_COOLDOWN_MS) {
       const remainingSeconds = Math.ceil(
-        (cooldown - timeSinceLastRequest) / 1000
+        (RESEND_COOLDOWN_MS - elapsed) / 1000
       );
 
       throw new AppError(
-        `Please wait ${remainingSeconds} seconds before requesting another verification code`,
+        `Please wait ${remainingSeconds} seconds before requesting another verification link`,
         429
       );
     }
   }
 
-  // Generate and send a new verification code
-  await createVerificationCode(
-    user._id,
-    user.email
-  );
+  await createVerificationLink(user._id, user.email);
 };
 
 module.exports = {
-  createVerificationCode,
-  verifyEmailCode,
-  resendVerificationCode,
+  createVerificationLink,
+  // Old name kept so auth.service.js keeps working without changes
+  createVerificationCode: createVerificationLink,
+  verifyEmailToken,
+  resendVerificationLink,
 };

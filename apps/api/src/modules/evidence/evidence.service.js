@@ -1,7 +1,11 @@
-
 const {
   analyzeEvidenceWithAI,
 } = require("../../integrations/openrouter/openrouter.service");
+
+const {
+  requireObjectId,
+  optionalHttpUrl,
+} = require("../../core/utils/validators");
 
 const Candidate = require("../candidates/candidate.model");
 const CandidateSkill = require("../skills/candidateSkill.model");
@@ -25,7 +29,6 @@ const SKILL_POPULATE = {
 };
 
 // Recalculate a candidate skill's score and verification status.
-
 const recalculateCandidateSkillScore = async (candidateSkillId) => {
   const candidateSkill = await CandidateSkill.findById(candidateSkillId);
 
@@ -37,8 +40,6 @@ const recalculateCandidateSkillScore = async (candidateSkillId) => {
     candidateSkillId: candidateSkill._id,
   }).select("verificationStatus confidenceScore aiAnalysis");
 
-  // Only analyzed, non-rejected evidence contributes to the score.
-  // Only analyzed, non-rejected evidence contributes to the score.
   // Only analyzed and human-verified evidence contributes to the skill score.
   const analyzedEvidence = allEvidence.filter(
     (item) =>
@@ -59,9 +60,9 @@ const recalculateCandidateSkillScore = async (candidateSkillId) => {
 
   candidateSkill.confidenceScore = validScores.length
     ? Math.round(
-      validScores.reduce((sum, score) => sum + score, 0) /
-      validScores.length
-    )
+        validScores.reduce((sum, score) => sum + score, 0) /
+          validScores.length
+      )
     : 0;
 
   const hasVerifiedEvidence = allEvidence.some(
@@ -92,12 +93,13 @@ const recalculateCandidateSkillScore = async (candidateSkillId) => {
   return candidateSkill;
 };
 
-
 // Create evidence for an active skill belonging to the candidate.
 const createEvidence = async (
   userId,
   { candidateSkillId, type, title, description, sourceUrl }
 ) => {
+  requireObjectId(candidateSkillId, "Candidate skill ID");
+
   const candidate = await Candidate.findOne({ userId });
 
   if (!candidate) {
@@ -139,13 +141,6 @@ const createEvidence = async (
     );
   }
 
-  if (
-    sourceUrl !== undefined &&
-    typeof sourceUrl !== "string"
-  ) {
-    throw new AppError("Source URL must be a string", 400);
-  }
-
   const evidence = await Evidence.create({
     candidateId: candidate._id,
     candidateSkillId: candidateSkill._id,
@@ -153,8 +148,7 @@ const createEvidence = async (
     title: title.trim(),
     description:
       typeof description === "string" ? description.trim() : "",
-    sourceUrl:
-      typeof sourceUrl === "string" ? sourceUrl.trim() : "",
+    sourceUrl: optionalHttpUrl(sourceUrl, "Source URL"),
   });
 
   await recalculateCandidateSkillScore(candidateSkill._id);
@@ -199,7 +193,7 @@ const getEvidenceById = async (userId, evidenceId) => {
 const updateEvidence = async (
   userId,
   evidenceId,
-  { type, title, description, sourceUrl }
+  { type, title, description, sourceUrl } = {}
 ) => {
   const candidate = await Candidate.findOne({ userId });
 
@@ -218,6 +212,14 @@ const updateEvidence = async (
 
   if (evidence.verificationStatus === "VERIFIED") {
     throw new AppError("Verified evidence cannot be edited", 400);
+  }
+
+  // Rejected evidence stays rejected. Submitting new evidence is the way forward.
+  if (evidence.verificationStatus === "REJECTED") {
+    throw new AppError(
+      "Rejected evidence cannot be edited. Submit new evidence instead.",
+      400
+    );
   }
 
   if (type !== undefined) {
@@ -258,11 +260,7 @@ const updateEvidence = async (
   }
 
   if (sourceUrl !== undefined) {
-    if (typeof sourceUrl !== "string") {
-      throw new AppError("Source URL must be a string", 400);
-    }
-
-    evidence.sourceUrl = sourceUrl.trim();
+    evidence.sourceUrl = optionalHttpUrl(sourceUrl, "Source URL");
   }
 
   // Editing invalidates the previous analysis and review.
@@ -308,7 +306,6 @@ const removeEvidence = async (userId, evidenceId) => {
 };
 
 // Analyze evidence using AI.
-
 const analyzeEvidence = async (userId, evidenceId) => {
   const candidate = await Candidate.findOne({ userId });
 
@@ -402,12 +399,11 @@ const analyzeEvidence = async (userId, evidenceId) => {
   return Evidence.findById(evidence._id).populate(SKILL_POPULATE);
 };
 
-
 // Reviewer approves or rejects evidence.
 const reviewEvidence = async (
   reviewerUserId,
   evidenceId,
-  { status, reviewNote = "" }
+  { status, reviewNote = "" } = {}
 ) => {
   if (!["VERIFIED", "REJECTED"].includes(status)) {
     throw new AppError(
@@ -427,6 +423,23 @@ const reviewEvidence = async (
 
   if (!evidence) {
     throw new AppError("Evidence not found", 404);
+  }
+
+  // Nobody reviews their own work.
+  const owner = await Candidate.findById(evidence.candidateId).select(
+    "userId"
+  );
+
+  if (owner && String(owner.userId) === String(reviewerUserId)) {
+    throw new AppError("You cannot review your own evidence", 403);
+  }
+
+  // A skill score comes from analyzed evidence, so require the analysis first.
+  if (status === "VERIFIED" && !evidence.aiAnalysis) {
+    throw new AppError(
+      "Run the AI analysis before verifying this evidence",
+      400
+    );
   }
 
   const candidateSkillId = evidence.candidateSkillId;
@@ -452,4 +465,5 @@ module.exports = {
   removeEvidence,
   analyzeEvidence,
   reviewEvidence,
+  recalculateCandidateSkillScore,
 };

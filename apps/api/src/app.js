@@ -1,10 +1,8 @@
-
 const express = require("express");
-
 const cors = require("cors");
+const helmet = require("helmet");
 
 const errorHandler = require("./core/errors/errorHandler");
-
 const { sendSuccess } = require("./core/utils/apiResponse");
 
 const authRoutes = require("./modules/auth/auth.routes");
@@ -14,34 +12,29 @@ const skillRoutes = require("./modules/skills/skill.routes");
 const candidateSkillRoutes = require("./modules/skills/candidateSkill.routes");
 const evidenceRoutes = require("./modules/evidence/evidence.routes");
 
-
 const app = express();
+
+app.use(helmet());
 
 app.use(
   cors({
-    origin: process.env.CLIENT_URL,
+    origin: process.env.CLIENT_URL || "http://localhost:5173",
   })
 );
 
-app.use(express.json());
+app.use(express.json({ limit: "100kb" }));
 
 app.get("/api/v1/health", (req, res) => {
   sendSuccess(res, 200, "Proovix API is running");
 });
 
 app.use("/api/v1/auth", authRoutes);
-
 app.use("/api/v1/users", userRoutes);
 app.use("/api/v1/candidates", candidateRoutes);
 app.use("/api/v1/skills", skillRoutes);
-app.use(
-  "/api/v1/candidates/me/skills",
-  candidateSkillRoutes
-);
-app.use(
-  "/api/v1/candidates/me/evidence",
-  evidenceRoutes
-);
+app.use("/api/v1/candidates/me/skills", candidateSkillRoutes);
+app.use("/api/v1/candidates/me/evidence", evidenceRoutes);
+
 app.use(errorHandler);
 
 module.exports = app;

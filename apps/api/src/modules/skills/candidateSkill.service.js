@@ -1,84 +1,54 @@
-
 const Candidate = require("../candidates/candidate.model");
 const Skill = require("./skill.model");
 const CandidateSkill = require("./candidateSkill.model");
-const Evidence = require("../evidence/evidence.model");
+const { recalculateCandidateSkillScore } = require("../evidence/evidence.service");
 
 const AppError = require("../../core/errors/AppError");
+const { requireObjectId } = require("../../core/utils/validators");
 
 const addSkillToCandidate = async (userId, skillId) => {
+  requireObjectId(skillId, "Skill ID");
+
   const candidate = await Candidate.findOne({ userId });
 
   if (!candidate) {
     throw new AppError("Candidate profile not found", 404);
   }
 
-  const skill = await Skill.findOne({
-    _id: skillId,
-    isActive: true,
-  });
+  const skill = await Skill.findOne({ _id: skillId, isActive: true });
 
   if (!skill) {
     throw new AppError("Skill not found", 404);
   }
 
-  const existingCandidateSkill = await CandidateSkill.findOne({
+  const existing = await CandidateSkill.findOne({
     candidateId: candidate._id,
     skillId: skill._id,
   });
 
-  if (existingCandidateSkill) {
-    if (!existingCandidateSkill.isActive) {
-      existingCandidateSkill.isActive = true;
-
-      // Recalculate from the existing, non-rejected evidence.
-      const analyzedEvidence = await Evidence.find({
-        candidateSkillId: existingCandidateSkill._id,
-        aiAnalysis: { $ne: null },
-        verificationStatus: { $ne: "REJECTED" },
-      }).select("confidenceScore");
-
-      const scores = analyzedEvidence
-        .map((item) => item.confidenceScore)
-        .filter(
-          (score) =>
-            typeof score === "number" &&
-            Number.isFinite(score) &&
-            score >= 0 &&
-            score <= 100
-        );
-
-      existingCandidateSkill.confidenceScore =
-        scores.length > 0
-          ? Math.round(
-              scores.reduce((sum, score) => sum + score, 0) /
-                scores.length
-            )
-          : 0;
-
-      if (
-        existingCandidateSkill.verificationStatus !== "VERIFIED" &&
-        existingCandidateSkill.verificationStatus !== "REJECTED"
-      ) {
-        existingCandidateSkill.verificationStatus =
-          scores.length > 0 ? "PENDING" : "UNVERIFIED";
-      }
-
-      await existingCandidateSkill.save();
-
-      return existingCandidateSkill;
+  if (existing) {
+    if (existing.isActive) {
+      throw new AppError("Skill is already added to this candidate", 409);
     }
 
-    throw new AppError(
-      "Skill is already added to this candidate",
-      409
-    );
+    // Bring the skill back and score it with the same rules as everywhere else.
+    existing.isActive = true;
+    await existing.save();
+
+    return recalculateCandidateSkillScore(existing._id);
   }
 
-  return CandidateSkill.create({
-    candidateId: candidate._id,
-    skillId: skill._id,
-  });
+  try {
+    return await CandidateSkill.create({
+      candidateId: candidate._id,
+      skillId: skill._id,
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      throw new AppError("Skill is already added to this candidate", 409);
+    }
+    throw error;
+  }
 };
 
 const getCandidateSkills = async (userId) => {
@@ -88,18 +58,14 @@ const getCandidateSkills = async (userId) => {
     throw new AppError("Candidate profile not found", 404);
   }
 
-  return CandidateSkill.find({
-    candidateId: candidate._id,
-    isActive: true,
-  })
-    .populate(
-      "skillId",
-      "name slug category description competencies"
-    )
+  return CandidateSkill.find({ candidateId: candidate._id, isActive: true })
+    .populate("skillId", "name slug category description competencies")
     .sort({ createdAt: -1 });
 };
 
 const removeSkillFromCandidate = async (userId, skillId) => {
+  requireObjectId(skillId, "Skill ID");
+
   const candidate = await Candidate.findOne({ userId });
 
   if (!candidate) {
@@ -116,7 +82,7 @@ const removeSkillFromCandidate = async (userId, skillId) => {
     throw new AppError("Candidate skill not found", 404);
   }
 
-  // Deactivate the skill without deleting its evidence history.
+  // Deactivate without deleting the evidence history.
   candidateSkill.isActive = false;
   candidateSkill.confidenceScore = 0;
   candidateSkill.verificationStatus = "UNVERIFIED";

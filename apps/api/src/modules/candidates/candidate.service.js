@@ -1,110 +1,125 @@
 const Candidate = require("./candidate.model");
-
 const AppError = require("../../core/errors/AppError");
+const {
+  requireString,
+  optionalString,
+  optionalHttpUrl,
+} = require("../../core/utils/validators");
 
-const createCandidateProfile = async ({
-  userId,
-  fullName,
-  username,
-}) => {
-  // Check whether candidate profile already exists
-  const existingCandidate = await Candidate.findOne({
-    userId,
-  });
+const USERNAME_PATTERN = /^[a-z0-9_-]{3,30}$/;
 
-  if (existingCandidate) {
+const normalizeUsername = (value) => {
+  if (typeof value !== "string") {
+    throw new AppError("Username is required", 400);
+  }
+
+  const username = value.trim().toLowerCase();
+
+  if (!USERNAME_PATTERN.test(username)) {
     throw new AppError(
-      "Candidate profile already exists",
-      409
+      "Username must be 3–30 characters and use only letters, numbers, underscores or hyphens",
+      400
     );
   }
 
-  // Check whether username is already taken
-  const existingUsername = await Candidate.findOne({
-    username,
-  });
+  return username;
+};
 
-  if (existingUsername) {
-    throw new AppError(
-      "Username is already taken",
-      409
-    );
+const createCandidateProfile = async ({ userId, fullName, username }) => {
+  const cleanName = requireString(fullName, "Full name", 100);
+  const cleanUsername = normalizeUsername(username);
+
+  if (await Candidate.findOne({ userId })) {
+    throw new AppError("Candidate profile already exists", 409);
   }
 
-  // Create candidate profile
-  const candidate = await Candidate.create({
-    userId,
-    fullName,
-    username,
-  });
+  if (await Candidate.findOne({ username: cleanUsername })) {
+    throw new AppError("Username is already taken", 409);
+  }
 
-  return candidate;
+  try {
+    return await Candidate.create({
+      userId,
+      fullName: cleanName,
+      username: cleanUsername,
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      throw new AppError("Username is already taken", 409);
+    }
+    throw error;
+  }
 };
 
 const getCandidateProfile = async (userId) => {
-  const candidate = await Candidate.findOne({
-    userId,
-  });
+  const candidate = await Candidate.findOne({ userId });
 
   if (!candidate) {
-    throw new AppError(
-      "Candidate profile not found",
-      404
-    );
+    throw new AppError("Candidate profile not found", 404);
   }
 
   return candidate;
 };
 
-const updateCandidateProfile = async (userId, updates) => {
-  const candidate = await Candidate.findOne({
-    userId,
-  });
+const updateCandidateProfile = async (userId, updates = {}) => {
+  const candidate = await Candidate.findOne({ userId });
 
   if (!candidate) {
-    throw new AppError(
-      "Candidate profile not found",
-      404
-    );
+    throw new AppError("Candidate profile not found", 404);
   }
 
-  // Fields that are allowed to be updated
-  const allowedFields = [
-    "fullName",
-    "username",
-    "headline",
-    "bio",
-    "location",
-    "profileImage",
-    "githubUrl",
-    "linkedinUrl",
-    "portfolioUrl",
-    "isPublic",
-  ];
+  const changes = {};
 
-  // Update only allowed fields
-  for (const field of allowedFields) {
-    if (updates[field] !== undefined) {
-      candidate[field] = updates[field];
-    }
+  if (updates.fullName !== undefined) {
+    changes.fullName = requireString(updates.fullName, "Full name", 100);
   }
 
-  // Check username uniqueness if username is being changed
   if (updates.username !== undefined) {
-    const existingUsername = await Candidate.findOne({
-      username: updates.username,
+    changes.username = normalizeUsername(updates.username);
+
+    const taken = await Candidate.findOne({
+      username: changes.username,
       _id: { $ne: candidate._id },
     });
 
-    if (existingUsername) {
-      throw new AppError(
-        "Username is already taken",
-        409
-      );
+    if (taken) {
+      throw new AppError("Username is already taken", 409);
     }
   }
 
-  await candidate.save();
+  if (updates.headline !== undefined) {
+    changes.headline = optionalString(updates.headline, "Headline", 150);
+  }
+  if (updates.bio !== undefined) {
+    changes.bio = optionalString(updates.bio, "Bio", 1000);
+  }
+  if (updates.location !== undefined) {
+    changes.location = optionalString(updates.location, "Location", 100);
+  }
+
+  for (const field of ["githubUrl", "linkedinUrl", "portfolioUrl", "profileImage"]) {
+    if (updates[field] !== undefined) {
+      changes[field] = optionalHttpUrl(updates[field], field);
+    }
+  }
+
+  if (updates.isPublic !== undefined) {
+    if (typeof updates.isPublic !== "boolean") {
+      throw new AppError("isPublic must be true or false", 400);
+    }
+    changes.isPublic = updates.isPublic;
+  }
+
+  Object.assign(candidate, changes);
+
+  try {
+    await candidate.save();
+  } catch (error) {
+    if (error.code === 11000) {
+      throw new AppError("Username is already taken", 409);
+    }
+    throw error;
+  }
 
   return candidate;
 };

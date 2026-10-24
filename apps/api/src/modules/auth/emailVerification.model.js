@@ -10,20 +10,18 @@ const emailVerificationSchema = new mongoose.Schema(
       index: true,
     },
 
-    codeHash: {
+    // SHA-256 hash of the token that was emailed (the raw token is never stored)
+    tokenHash: {
       type: String,
       required: true,
+      unique: true,
+      sparse: true,
     },
 
     expiresAt: {
       type: Date,
       required: true,
       index: true,
-    },
-
-    attempts: {
-      type: Number,
-      default: 0,
     },
   },
   {

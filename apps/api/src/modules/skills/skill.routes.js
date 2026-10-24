@@ -1,20 +1,18 @@
 const express = require("express");
 
-const {
-  create,
-  getAll,
-  getBySlug,
-} = require("./skill.controller");
+const authMiddleware = require("../../core/middleware/authMiddleware");
+const authorizeRoles = require("../../core/middleware/authorizeRoles");
+
+const { create, getAll, getBySlug } = require("./skill.controller");
 
 const router = express.Router();
 
-// Create a new skill
-router.post("/", create);
+router.use(authMiddleware);
 
-// Get all active skills
+// Only admins can add skills to the catalog
+router.post("/", authorizeRoles("ADMIN"), create);
+
 router.get("/", getAll);
-
-// Get skill by slug
 router.get("/:slug", getBySlug);
 
 module.exports = router;
