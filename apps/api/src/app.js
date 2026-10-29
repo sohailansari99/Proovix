@@ -11,6 +11,7 @@ const candidateRoutes = require("./modules/candidates/candidate.routes");
 const skillRoutes = require("./modules/skills/skill.routes");
 const candidateSkillRoutes = require("./modules/skills/candidateSkill.routes");
 const evidenceRoutes = require("./modules/evidence/evidence.routes");
+const reviewRoutes = require("./modules/reviews/reviews.routes");
 
 const app = express();
 
@@ -34,6 +35,7 @@ app.use("/api/v1/candidates", candidateRoutes);
 app.use("/api/v1/skills", skillRoutes);
 app.use("/api/v1/candidates/me/skills", candidateSkillRoutes);
 app.use("/api/v1/candidates/me/evidence", evidenceRoutes);
+app.use("/api/v1/reviews", reviewRoutes);
 
 app.use(errorHandler);
 

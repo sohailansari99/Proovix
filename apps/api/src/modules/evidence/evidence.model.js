@@ -32,20 +32,20 @@ const evidenceSchema = new mongoose.Schema(
     },
 
     reviewedBy: {
-  type: mongoose.Schema.Types.ObjectId,
-  ref: "User",
-  default: null,
-},
-reviewedAt: {
-  type: Date,
-  default: null,
-},
-reviewNote: {
-  type: String,
-  trim: true,
-  maxlength: 1000,
-  default: "",
-},
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    reviewedAt: {
+      type: Date,
+      default: null,
+    },
+    reviewNote: {
+      type: String,
+      trim: true,
+      maxlength: 1000,
+      default: "",
+    },
 
     // Name/title of the evidence
     title: {
@@ -77,13 +77,13 @@ reviewNote: {
     // Current verification status
     verificationStatus: {
       type: String,
-      enum: [
-        "PENDING",
-        "VERIFIED",
-        "REJECTED",
-      ],
+      enum: ["PENDING", "VERIFIED", "REJECTED", "CHANGES_REQUESTED"],
       default: "PENDING",
     },
+
+    track: { type: String, enum: ["FRONTEND", "BACKEND"], default: null, index: true },
+    assignedReviewerId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null, index: true },
+    assignedAt: { type: Date, default: null },
 
     // AI/evidence confidence score
     confidenceScore: {

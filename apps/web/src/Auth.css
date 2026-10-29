@@ -334,6 +334,22 @@
   .auth-submit { min-height: 52px; }
 }
 
+/* ---------- Candidate / Reviewer picker ---------- */
+
+.auth-role { margin-bottom: 20px; }
+.auth-role-label { display: block; margin-bottom: 8px; color: var(--a-ink-2); font-size: 14px; font-weight: 600; }
+.auth-role-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.auth-role-option {
+  display: grid; gap: 2px; padding: 12px 14px; text-align: left;
+  color: var(--a-ink); background: #fbfcfa; border: 1px solid var(--a-line); border-radius: 8px;
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+.auth-role-option strong { font-size: 15px; font-weight: 600; }
+.auth-role-option small { color: var(--a-muted); font-size: 12px; }
+.auth-role-option:hover { border-color: var(--a-forest); }
+.auth-role-option.active { background: #e6efeb; border-color: var(--a-forest); box-shadow: 0 0 0 1px var(--a-forest) inset; }
+.auth-role-option.active strong { color: var(--a-forest); }
+
 @media (max-width: 380px) {
   .auth-form-panel { padding: 24px 16px 28px; }
   .auth-heading h2 { font-size: 27px; }

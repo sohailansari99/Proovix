@@ -2,7 +2,6 @@ const express = require("express");
 const rateLimit = require("express-rate-limit");
 
 const authMiddleware = require("../../core/middleware/authMiddleware");
-const authorizeRoles = require("../../core/middleware/authorizeRoles");
 const AppError = require("../../core/errors/AppError");
 
 const {
@@ -12,7 +11,6 @@ const {
   getOne,
   remove,
   analyze,
-  review,
 } = require("./evidence.controller");
 
 const router = express.Router();
@@ -32,7 +30,6 @@ const analyzeRateLimiter = rateLimit({
 
 router.use(authMiddleware);
 
-// Reject malformed IDs before they reach the database.
 router.param("evidenceId", (req, res, next, id) => {
   if (!/^[a-f\d]{24}$/i.test(id)) {
     return next(new AppError("Evidence ID is invalid", 400));
@@ -45,13 +42,6 @@ router.get("/", getAll);
 router.get("/:evidenceId", getOne);
 router.patch("/:evidenceId", update);
 router.delete("/:evidenceId", remove);
-
 router.post("/:evidenceId/analyze", analyzeRateLimiter, analyze);
-
-router.patch(
-  "/:evidenceId/review",
-  authorizeRoles("ADMIN", "REVIEWER"),
-  review
-);
 
 module.exports = router;

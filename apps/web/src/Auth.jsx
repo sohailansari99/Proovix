@@ -6,6 +6,8 @@ const searchParams = new URLSearchParams(window.location.search);
 const initialResetToken = searchParams.get("token");
 const initialVerifyToken = searchParams.get("verify");
 
+const STAFF_ROLES = ["REVIEWER", "ADMIN"];
+
 function cleanUrl() {
   window.history.replaceState({}, document.title, window.location.pathname);
 }
@@ -19,9 +21,14 @@ export default function Auth({ onAuthenticated }) {
         : "login"
   );
 
+  // Which dashboard the person wants: "candidate" or "reviewer".
+  const [accountType, setAccountType] = useState("candidate");
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [reviewerCode, setReviewerCode] = useState("");
+  const [reviewerTracks, setReviewerTracks] = useState([]);
   const [resetToken, setResetToken] = useState(initialResetToken || "");
 
   const [loading, setLoading] = useState(false);
@@ -32,10 +39,14 @@ export default function Auth({ onAuthenticated }) {
   const verifyStarted = useRef(false);
 
   const isRegister = mode === "register";
+  const isLogin = mode === "login";
   const isVerifyEmail = mode === "verify-email"; // "check your inbox" screen
   const isVerifying = mode === "verifying"; // link was opened, verifying now
   const isForgotPassword = mode === "forgot-password";
   const isResetPassword = mode === "reset-password";
+
+  const showRolePicker = isLogin || isRegister;
+  const registeringReviewer = isRegister && accountType === "reviewer";
 
   // When the user opens the link from their email (?verify=TOKEN),
   // verify automatically. The ref stops React from running it twice.
@@ -79,6 +90,27 @@ export default function Auth({ onAuthenticated }) {
     setNeedsVerification(false);
     setPassword("");
     setConfirmPassword("");
+    setReviewerCode("");
+    setReviewerTracks([]);
+  }
+
+  function chooseAccountType(next) {
+    setAccountType(next);
+    setError("");
+    setSuccess("");
+    setNeedsVerification(false);
+    if (next === "candidate") {
+      setReviewerCode("");
+      setReviewerTracks([]);
+    }
+  }
+
+  function toggleTrack(track) {
+    setReviewerTracks((current) =>
+      current.includes(track)
+        ? current.filter((item) => item !== track)
+        : [...current, track]
+    );
   }
 
   async function resendLink() {
@@ -132,22 +164,39 @@ export default function Auth({ onAuthenticated }) {
       return;
     }
 
+    if (registeringReviewer && !reviewerCode.trim()) {
+      setError("Enter the reviewer access code you were given.");
+      return;
+    }
+
+    if (registeringReviewer && reviewerTracks.length === 0) {
+      setError("Choose at least one track you can review.");
+      return;
+    }
+
     setLoading(true);
 
     try {
       const normalizedEmail = email.trim().toLowerCase();
 
       if (isRegister) {
-        const response = await api.post("/api/v1/auth/register", {
-          email: normalizedEmail,
-          password,
-        });
+        const payload = { email: normalizedEmail, password };
+
+        if (registeringReviewer) {
+          payload.role = "REVIEWER";
+          payload.reviewerCode = reviewerCode.trim();
+          payload.reviewerTracks = reviewerTracks;
+        }
+
+        const response = await api.post("/api/v1/auth/register", payload);
 
         const result = response.data?.data ?? response.data;
 
         setEmail(normalizedEmail);
         setPassword("");
         setConfirmPassword("");
+        setReviewerCode("");
+        setReviewerTracks([]);
 
         if (result?.emailVerified) {
           setMode("login");
@@ -212,6 +261,15 @@ export default function Auth({ onAuthenticated }) {
         );
       }
 
+      // Only accounts the server marked as reviewers can use the reviewer side.
+      const isStaff = STAFF_ROLES.includes(result.user?.role);
+
+      if (accountType === "reviewer" && !isStaff) {
+        throw new Error(
+          "This account doesn't have reviewer access. Choose Candidate to sign in, or create a reviewer account with an access code."
+        );
+      }
+
       localStorage.setItem("token", result.token);
 
       if (result.user) {
@@ -219,7 +277,7 @@ export default function Auth({ onAuthenticated }) {
       }
 
       if (onAuthenticated) {
-        onAuthenticated(result);
+        onAuthenticated(result, accountType);
       } else {
         window.location.reload();
       }
@@ -231,7 +289,7 @@ export default function Auth({ onAuthenticated }) {
 
       // The API answers 403 when the email hasn't been verified yet.
       if (
-        mode === "login" &&
+        isLogin &&
         err.response?.status === 403 &&
         /verify/i.test(message)
       ) {
@@ -246,11 +304,18 @@ export default function Auth({ onAuthenticated }) {
 
   function renderHeading() {
     if (isRegister) {
-      return {
-        eyebrow: "GET STARTED",
-        title: "Create your account",
-        description: "Start building a profile that shows what you can do.",
-      };
+      return registeringReviewer
+        ? {
+            eyebrow: "REVIEWER ACCESS",
+            title: "Create a reviewer account",
+            description:
+              "Review candidates' evidence and record your decisions. You need an access code from the Proovix team.",
+          }
+        : {
+            eyebrow: "GET STARTED",
+            title: "Create your account",
+            description: "Start building a profile that shows what you can do.",
+          };
     }
 
     if (isVerifyEmail) {
@@ -291,7 +356,10 @@ export default function Auth({ onAuthenticated }) {
     return {
       eyebrow: "WELCOME BACK",
       title: "Sign in to Proovix",
-      description: "Continue building your evidence-backed profile.",
+      description:
+        accountType === "reviewer"
+          ? "Open the review desk to check submitted evidence."
+          : "Continue building your evidence-backed profile.",
     };
   }
 
@@ -345,7 +413,7 @@ export default function Auth({ onAuthenticated }) {
             </div>
           )}
 
-          {needsVerification && mode === "login" && (
+          {needsVerification && isLogin && (
             <div style={{ margin: "-8px 0 20px" }}>
               <button
                 type="button"
@@ -392,12 +460,34 @@ export default function Auth({ onAuthenticated }) {
             </div>
           )}
 
-          {!(
-            isVerifyEmail ||
-            isVerifying ||
-            isForgotPassword ||
-            isResetPassword
-          ) && (
+          {showRolePicker && (
+            <div className="auth-role" role="group" aria-label="Account type">
+              <span className="auth-role-label">
+                {isRegister ? "I want to join as" : "Sign in as"}
+              </span>
+              <div className="auth-role-options">
+                {[
+                  ["candidate", "Candidate", "Prove my skills"],
+                  ["reviewer", "Reviewer", "Check evidence"],
+                ].map(([value, label, hint]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={`auth-role-option ${
+                      accountType === value ? "active" : ""
+                    }`}
+                    aria-pressed={accountType === value}
+                    onClick={() => chooseAccountType(value)}
+                  >
+                    <strong>{label}</strong>
+                    <small>{hint}</small>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {showRolePicker && (
             <div
               className="auth-tabs"
               role="tablist"
@@ -427,7 +517,7 @@ export default function Auth({ onAuthenticated }) {
 
           {showForm && (
             <form className="auth-form" onSubmit={handleSubmit}>
-              {(mode === "login" || isRegister || isForgotPassword) && (
+              {(isLogin || isRegister || isForgotPassword) && (
                 <div className="auth-field">
                   <label htmlFor="auth-email">Gmail address</label>
                   <input
@@ -442,7 +532,7 @@ export default function Auth({ onAuthenticated }) {
                 </div>
               )}
 
-              {(mode === "login" || isRegister || isResetPassword) && (
+              {(isLogin || isRegister || isResetPassword) && (
                 <div className="auth-field">
                   <label htmlFor="auth-password">
                     {isResetPassword ? "New password" : "Password"}
@@ -459,9 +549,7 @@ export default function Auth({ onAuthenticated }) {
                     }
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
-                    autoComplete={
-                      mode === "login" ? "current-password" : "new-password"
-                    }
+                    autoComplete={isLogin ? "current-password" : "new-password"}
                     minLength={isRegister || isResetPassword ? 8 : undefined}
                     required
                   />
@@ -488,7 +576,55 @@ export default function Auth({ onAuthenticated }) {
                 </div>
               )}
 
-              {mode === "login" && (
+              {registeringReviewer && (
+                <div className="auth-field">
+                  <label htmlFor="auth-reviewer-code">
+                    Reviewer access code
+                  </label>
+                  <input
+                    id="auth-reviewer-code"
+                    type="password"
+                    placeholder="Enter the code you were given"
+                    value={reviewerCode}
+                    onChange={(event) => setReviewerCode(event.target.value)}
+                    autoComplete="off"
+                    required
+                  />
+                  <small>
+                    Reviewer accounts decide whether evidence is approved, so
+                    they need a code from the Proovix team.
+                  </small>
+                </div>
+              )}
+
+              {registeringReviewer && (
+                <div className="auth-field">
+                  <label>Tracks you can review</label>
+                  <div className="auth-role-options">
+                    {[
+                      ["FRONTEND", "Frontend"],
+                      ["BACKEND", "Backend"],
+                    ].map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className={`auth-role-option ${
+                          reviewerTracks.includes(value) ? "active" : ""
+                        }`}
+                        aria-pressed={reviewerTracks.includes(value)}
+                        onClick={() => toggleTrack(value)}
+                      >
+                        <strong>{label}</strong>
+                      </button>
+                    ))}
+                  </div>
+                  <small>
+                    You will only be sent evidence from the tracks you choose.
+                  </small>
+                </div>
+              )}
+
+              {isLogin && (
                 <div className="auth-forgot-row">
                   <button
                     type="button"
@@ -508,12 +644,16 @@ export default function Auth({ onAuthenticated }) {
                 {loading
                   ? "Please wait..."
                   : isRegister
-                    ? "Create account"
+                    ? registeringReviewer
+                      ? "Create reviewer account"
+                      : "Create account"
                     : isForgotPassword
                       ? "Send reset instructions"
                       : isResetPassword
                         ? "Reset password"
-                        : "Sign in"}
+                        : accountType === "reviewer"
+                          ? "Sign in to review desk"
+                          : "Sign in"}
 
                 {!loading && <span aria-hidden="true">→</span>}
               </button>
@@ -545,7 +685,7 @@ export default function Auth({ onAuthenticated }) {
             </p>
           )}
 
-          {(mode === "login" || isRegister) && (
+          {showRolePicker && (
             <p className="auth-switch">
               {isRegister ? "Already have an account?" : "New to Proovix?"}{" "}
               <button

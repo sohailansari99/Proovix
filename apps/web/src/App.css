@@ -623,6 +623,9 @@ textarea:focus-visible {
 .next-step.is-done .step-number { color: var(--success); }
 .next-step.is-done .step-copy strong { color: var(--muted); }
 
+.hint { margin: 0; padding: 12px 14px; color: #7a5412; background: #fbf3e1; border: 1px solid #efdcb0; border-radius: 8px; font-size: 14px; line-height: 1.6; }
+.hint .auth-text-button { padding: 0; color: var(--forest); background: none; border: 0; font: inherit; font-weight: 600; text-decoration: underline; }
+
 @media (max-width: 760px) {
   .item-card { padding: 16px; }
   .item-actions .button { flex: 1 1 calc(50% - 8px); }

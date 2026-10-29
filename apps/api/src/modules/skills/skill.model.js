@@ -37,6 +37,12 @@ const skillSchema = new mongoose.Schema(
       maxlength: 1000,
     },
 
+    track: {
+      type: String,
+      enum: ["FRONTEND", "BACKEND"],
+      index: true,
+    },
+
     // Core abilities associated with the skill
     competencies: {
       type: [String],

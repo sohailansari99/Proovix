@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { getMessage, safeUrl, unwrap } from "../lib/helpers";
-import { Icon, StatusBadge, NeedProfile } from "../components/ui";
+import { Icon, StatusBadge, NeedProfile, Analysis } from "../components/ui";
 
 const TYPES = [
   ["PROJECT", "Project"],
@@ -15,9 +15,13 @@ const TYPE_LABEL = Object.fromEntries(TYPES);
 const FILTERS = [
   ["ALL", "All"],
   ["PENDING", "Awaiting review"],
-  ["VERIFIED", "Verified"],
+  ["CHANGES_REQUESTED", "Needs more evidence"],
+  ["VERIFIED", "Approved"],
   ["REJECTED", "Rejected"],
 ];
+
+// Evidence in these states can still be edited by the candidate.
+const EDITABLE = ["PENDING", "CHANGES_REQUESTED"];
 
 const EMPTY_FORM = {
   candidateSkillId: "",
@@ -33,61 +37,6 @@ function hostOf(href) {
   } catch {
     return href;
   }
-}
-
-function Analysis({ data }) {
-  const competencies = data.competencies || [];
-  const strengths = data.strengths || [];
-  const missing = data.missingEvidence || [];
-
-  return (
-    <div className="analysis">
-      <p className="analysis-summary">{data.summary}</p>
-
-      {competencies.length > 0 && (
-        <>
-          <h4>Competencies</h4>
-          <ul className="meter-list">
-            {competencies.map((c) => (
-              <li key={c.name}>
-                <div className="score-line">
-                  <span>{c.name}</span>
-                  <strong>{c.score}</strong>
-                </div>
-                <div className="meter" aria-hidden="true">
-                  <div style={{ width: `${c.score}%` }} />
-                </div>
-                <small>{c.reason}</small>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-
-      <div className="analysis-columns">
-        {strengths.length > 0 && (
-          <div>
-            <h4>Strengths</h4>
-            <ul>
-              {strengths.map((s) => (
-                <li key={s}>{s}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {missing.length > 0 && (
-          <div>
-            <h4>What would make it stronger</h4>
-            <ul>
-              {missing.map((s) => (
-                <li key={s}>{s}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
-    </div>
-  );
 }
 
 export default function Evidence({ profileExists, onNavigate, onSessionExpired }) {
@@ -135,7 +84,13 @@ export default function Evidence({ profileExists, onNavigate, onSessionExpired }
   }, [profileExists, load]);
 
   const counts = useMemo(() => {
-    const result = { ALL: items.length, PENDING: 0, VERIFIED: 0, REJECTED: 0 };
+    const result = {
+      ALL: items.length,
+      PENDING: 0,
+      CHANGES_REQUESTED: 0,
+      VERIFIED: 0,
+      REJECTED: 0,
+    };
     items.forEach((item) => {
       result[item.verificationStatus] = (result[item.verificationStatus] || 0) + 1;
     });
@@ -199,7 +154,9 @@ export default function Evidence({ profileExists, onNavigate, onSessionExpired }
     try {
       if (editingId) {
         await api.patch(`/api/v1/candidates/me/evidence/${editingId}`, fields);
-        setNotice("Evidence updated. Run the AI analysis again to refresh its feedback.");
+        setNotice(
+          "Evidence updated and sent back for review. Run the AI analysis again to refresh its feedback."
+        );
       } else {
         await api.post("/api/v1/candidates/me/evidence", {
           candidateSkillId: form.candidateSkillId,
@@ -220,7 +177,7 @@ export default function Evidence({ profileExists, onNavigate, onSessionExpired }
     if (
       item.verificationStatus === "VERIFIED" &&
       !window.confirm(
-        "Re-running the analysis sends this verified evidence back for review. Continue?"
+        "Re-running the analysis sends this approved evidence back for review. Continue?"
       )
     ) {
       return;
@@ -241,7 +198,7 @@ export default function Evidence({ profileExists, onNavigate, onSessionExpired }
         );
         setExpanded((current) => ({ ...current, [updated._id]: true }));
       }
-      setNotice("Analysis finished. A reviewer still needs to verify this evidence.");
+      setNotice("Analysis finished. A reviewer still needs to approve this evidence.");
     } catch (err) {
       fail(err);
     } finally {
@@ -274,7 +231,7 @@ export default function Evidence({ profileExists, onNavigate, onSessionExpired }
           <p>
             Add projects, repositories and certificates that back up your
             skills. The AI analysis gives you feedback, but a reviewer must
-            verify evidence before it counts toward a skill score.
+            approve evidence before it counts toward a skill score.
           </p>
         </div>
 
@@ -388,7 +345,10 @@ export default function Evidence({ profileExists, onNavigate, onSessionExpired }
                     maxLength={500}
                     placeholder="https://github.com/you/project"
                   />
-                  <small>Repository, live site or certificate page. Must start with http or https.</small>
+                  <small>
+                    Link to the exact repository or page, not just the site
+                    name. Must start with http or https.
+                  </small>
                 </label>
 
                 <label className="field field-full">
@@ -447,7 +407,10 @@ export default function Evidence({ profileExists, onNavigate, onSessionExpired }
                 backing up your skills.
               </span>
               <div>
-                <button className="button button-primary button-small" onClick={openNew}>
+                <button
+                  className="button button-primary button-small"
+                  onClick={openNew}
+                >
                   Add evidence
                 </button>
               </div>
@@ -467,6 +430,8 @@ export default function Evidence({ profileExists, onNavigate, onSessionExpired }
               const status = item.verificationStatus;
               const isOpen = Boolean(expanded[item._id]);
               const analyzing = analyzingId === item._id;
+              const canEdit = EDITABLE.includes(status);
+              const skillInactive = item.candidateSkillId?.isActive === false;
 
               return (
                 <article className="item-card" key={item._id}>
@@ -502,6 +467,34 @@ export default function Evidence({ profileExists, onNavigate, onSessionExpired }
                     </p>
                   )}
 
+                  {status === "CHANGES_REQUESTED" && (
+                    <p className="hint">
+                      <strong>A reviewer asked for more evidence.</strong> Edit
+                      this item and save to send it back for review.
+                    </p>
+                  )}
+
+                  {status === "REJECTED" && (
+                    <p className="hint">
+                      This evidence was rejected. Add new evidence that addresses
+                      the reviewer’s note.
+                    </p>
+                  )}
+
+                  {skillInactive && (
+                    <p className="hint">
+                      <strong>This skill was removed from your list.</strong> Add{" "}
+                      {item.candidateSkillId?.skillId?.name || "it"} back on the
+                      Skills page to analyze this evidence again.{" "}
+                      <button
+                        className="auth-text-button"
+                        onClick={() => onNavigate("skills")}
+                      >
+                        Go to skills
+                      </button>
+                    </p>
+                  )}
+
                   <p className="score-note">
                     {item.aiAnalysis ? (
                       <>
@@ -518,11 +511,13 @@ export default function Evidence({ profileExists, onNavigate, onSessionExpired }
                     <button
                       className="button button-primary button-small"
                       onClick={() => analyze(item)}
-                      disabled={analyzing || status === "REJECTED"}
+                      disabled={analyzing || status === "REJECTED" || skillInactive}
                       title={
                         status === "REJECTED"
                           ? "Rejected evidence can't be analyzed. Add new evidence instead."
-                          : undefined
+                          : skillInactive
+                            ? "Add this skill back on the Skills page first."
+                            : undefined
                       }
                     >
                       <Icon name="spark" size={15} />
@@ -551,10 +546,10 @@ export default function Evidence({ profileExists, onNavigate, onSessionExpired }
                     <button
                       className="button button-secondary button-small"
                       onClick={() => openEdit(item)}
-                      disabled={status !== "PENDING"}
+                      disabled={!canEdit}
                       title={
-                        status !== "PENDING"
-                          ? "Only evidence that is awaiting review can be edited."
+                        !canEdit
+                          ? "Only evidence that is awaiting review or needs more evidence can be edited."
                           : undefined
                       }
                     >

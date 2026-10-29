@@ -31,6 +31,11 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    reviewerTracks: {
+      type: [String],
+      enum: ["FRONTEND", "BACKEND"],
+      default: [],
+    },
 
     lastLoginAt: {
       type: Date,

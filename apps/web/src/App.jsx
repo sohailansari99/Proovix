@@ -4,6 +4,7 @@ import { getMessage } from "./lib/helpers";
 import Auth from "./Auth";
 import Skills from "./pages/Skills";
 import Evidence from "./pages/Evidence";
+import ReviewerApp from "./reviewer/ReviewerApp";
 import { Icon } from "./components/ui";
 import "./App.css";
 
@@ -27,6 +28,8 @@ const NAV_ITEMS = [
   { id: "evidence", label: "Evidence", icon: "file" },
 ];
 
+const VIEW_KEY = "proovix_view";
+
 function readUser() {
   try {
     return JSON.parse(localStorage.getItem("user") || "null");
@@ -44,6 +47,17 @@ function App() {
     Boolean(localStorage.getItem("token"))
   );
 
+  // Which dashboard a reviewer or admin is looking at.
+  const [view, setView] = useState(() => {
+    try {
+      return sessionStorage.getItem(VIEW_KEY) === "candidate"
+        ? "candidate"
+        : "reviewer";
+    } catch {
+      return "reviewer";
+    }
+  });
+
   const [page, setPage] = useState("overview");
   const [profile, setProfile] = useState(EMPTY_PROFILE);
   const [profileExists, setProfileExists] = useState(false);
@@ -53,11 +67,22 @@ function App() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
+  const user = readUser();
+  const isStaff = ["REVIEWER", "ADMIN"].includes(user?.role);
+  const inReviewerView = isAuthenticated && isStaff && view === "reviewer";
+
   const handleLogout = useCallback(() => {
     localStorage.removeItem("token");
     localStorage.removeItem("user");
 
+    try {
+      sessionStorage.removeItem(VIEW_KEY);
+    } catch {
+      // Storage can be unavailable; nothing to clean up then.
+    }
+
     setIsAuthenticated(false);
+    setView("reviewer");
     setProfile(EMPTY_PROFILE);
     setProfileExists(false);
     setStats(EMPTY_STATS);
@@ -73,12 +98,26 @@ function App() {
     window.scrollTo({ top: 0 });
   }, []);
 
-  // Load the candidate profile only after authentication.
+  function switchView(next) {
+    try {
+      sessionStorage.setItem(VIEW_KEY, next);
+    } catch {
+      // The switch still works for this session without storage.
+    }
+
+    setView(next);
+    setPage("overview");
+    setError("");
+    setNotice("");
+    window.scrollTo({ top: 0 });
+  }
+
+  // Load the candidate profile only for candidate screens.
   useEffect(() => {
     let active = true;
 
     async function loadProfile() {
-      if (!isAuthenticated) {
+      if (!isAuthenticated || inReviewerView) {
         setLoading(false);
         return;
       }
@@ -120,11 +159,18 @@ function App() {
     return () => {
       active = false;
     };
-  }, [isAuthenticated, handleLogout]);
+  }, [isAuthenticated, inReviewerView, handleLogout]);
 
   // Real skill and evidence counts for the overview.
   useEffect(() => {
-    if (!isAuthenticated || !profileExists || page !== "overview") return;
+    if (
+      !isAuthenticated ||
+      inReviewerView ||
+      !profileExists ||
+      page !== "overview"
+    ) {
+      return undefined;
+    }
 
     let active = true;
 
@@ -156,7 +202,7 @@ function App() {
     return () => {
       active = false;
     };
-  }, [isAuthenticated, profileExists, page]);
+  }, [isAuthenticated, inReviewerView, profileExists, page]);
 
   function handleAuthenticated() {
     setError("");
@@ -304,7 +350,6 @@ function App() {
     button: "View evidence",
   };
 
-  const user = readUser();
   const initials = profile.fullName
     ? profile.fullName
         .split(/\s+/)
@@ -314,12 +359,22 @@ function App() {
         .toUpperCase()
     : "P";
 
-  const statValue = (group, key) =>
-    group ? String(group[key]) : "—";
+  const statValue = (group, key) => (group ? String(group[key]) : "—");
 
-  // Unauthenticated visitors see login/register, not the dashboard.
+  // Unauthenticated visitors see login/register, not a dashboard.
   if (!isAuthenticated) {
     return <Auth onAuthenticated={handleAuthenticated} />;
+  }
+
+  // Reviewers and admins start on the Review desk. The API enforces roles too.
+  if (inReviewerView) {
+    return (
+      <ReviewerApp
+        user={user}
+        onLogout={handleLogout}
+        onSwitch={() => switchView("candidate")}
+      />
+    );
   }
 
   return (
@@ -380,6 +435,16 @@ function App() {
             <div className="user-avatar" aria-hidden="true">
               {initials}
             </div>
+
+            {isStaff && (
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => switchView("reviewer")}
+              >
+                Reviewer dashboard
+              </button>
+            )}
 
             <button
               className="button button-secondary"

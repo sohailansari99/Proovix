@@ -4,6 +4,7 @@ const ICONS = {
   target: ["M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z", "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z"],
   file: ["M7 3h7l5 5v13H7z", "M14 3v5h5", "M10 15l2 2 3.5-4"],
   arrow: ["M5 12h14", "M13 6l6 6-6 6"],
+  back: ["M19 12H5", "M11 6l-6 6 6 6"],
   plus: ["M12 5v14", "M5 12h14"],
   trash: ["M4 7h16", "M10 11v6", "M14 11v6", "M6 7l1 13h10l1-13", "M9 7V4h6v3"],
   edit: ["M4 20h4L19 9l-4-4L4 16z"],
@@ -15,6 +16,9 @@ const ICONS = {
     "M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1",
   ],
   chevron: ["M6 9l6 6 6-6"],
+  list: ["M8 6h12", "M8 12h12", "M8 18h12", "M4 6h.01", "M4 12h.01", "M4 18h.01"],
+  clock: ["M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z", "M12 7v5l3 2"],
+  message: ["M4 5h16v11H9l-5 4z"],
 };
 
 export function Icon({ name, size = 18 }) {
@@ -41,13 +45,75 @@ export function Icon({ name, size = 18 }) {
 const STATUS = {
   UNVERIFIED: ["No evidence yet", "neutral"],
   PENDING: ["Awaiting review", "pending"],
-  VERIFIED: ["Verified", "verified"],
+  VERIFIED: ["Approved", "verified"],
   REJECTED: ["Rejected", "rejected"],
+  CHANGES_REQUESTED: ["More evidence needed", "pending"],
+};
+
+export const ACTION_LABEL = {
+  VERIFIED: "Approved",
+  REJECTED: "Rejected",
+  CHANGES_REQUESTED: "Asked for more evidence",
 };
 
 export function StatusBadge({ status }) {
   const [label, tone] = STATUS[status] || STATUS.UNVERIFIED;
   return <span className={`badge badge-${tone}`}>{label}</span>;
+}
+
+export function Analysis({ data }) {
+  const competencies = data.competencies || [];
+  const strengths = data.strengths || [];
+  const missing = data.missingEvidence || [];
+
+  return (
+    <div className="analysis">
+      <p className="analysis-summary">{data.summary}</p>
+
+      {competencies.length > 0 && (
+        <>
+          <h4>Competencies</h4>
+          <ul className="meter-list">
+            {competencies.map((c) => (
+              <li key={c.name}>
+                <div className="score-line">
+                  <span>{c.name}</span>
+                  <strong>{c.score}</strong>
+                </div>
+                <div className="meter" aria-hidden="true">
+                  <div style={{ width: `${c.score}%` }} />
+                </div>
+                <small>{c.reason}</small>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      <div className="analysis-columns">
+        {strengths.length > 0 && (
+          <div>
+            <h4>Strengths</h4>
+            <ul>
+              {strengths.map((s) => (
+                <li key={s}>{s}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {missing.length > 0 && (
+          <div>
+            <h4>What would make it stronger</h4>
+            <ul>
+              {missing.map((s) => (
+                <li key={s}>{s}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function NeedProfile({ onNavigate }) {

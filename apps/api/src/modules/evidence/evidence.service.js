@@ -9,8 +9,10 @@ const {
 
 const Candidate = require("../candidates/candidate.model");
 const CandidateSkill = require("../skills/candidateSkill.model");
+const Skill = require("../skills/skill.model");
 const Evidence = require("./evidence.model");
 const AppError = require("../../core/errors/AppError");
+const { assignEvidence } = require("../reviews/assignment.service");
 
 const ALLOWED_EVIDENCE_TYPES = [
   "PROJECT",
@@ -24,7 +26,7 @@ const SKILL_POPULATE = {
   path: "candidateSkillId",
   populate: {
     path: "skillId",
-    select: "name slug category description competencies",
+    select: "name slug category description competencies track",
   },
 };
 
@@ -70,7 +72,9 @@ const recalculateCandidateSkillScore = async (candidateSkillId) => {
   );
 
   const hasPendingEvidence = allEvidence.some(
-    (item) => item.verificationStatus === "PENDING"
+    (item) =>
+      item.verificationStatus === "PENDING" ||
+      item.verificationStatus === "CHANGES_REQUESTED"
   );
 
   const hasRejectedEvidence = allEvidence.some(
@@ -94,6 +98,7 @@ const recalculateCandidateSkillScore = async (candidateSkillId) => {
 };
 
 // Create evidence for an active skill belonging to the candidate.
+// The evidence is routed to a reviewer for the skill's track.
 const createEvidence = async (
   userId,
   { candidateSkillId, type, title, description, sourceUrl }
@@ -141,15 +146,31 @@ const createEvidence = async (
     );
   }
 
+  // The skill decides which reviewer track handles this evidence.
+  const skillDoc = await Skill.findById(candidateSkill.skillId)
+    .select("track")
+    .lean();
+
+  const track = skillDoc?.track || null;
+
   const evidence = await Evidence.create({
     candidateId: candidate._id,
     candidateSkillId: candidateSkill._id,
     type,
+    track,
     title: title.trim(),
     description:
       typeof description === "string" ? description.trim() : "",
     sourceUrl: optionalHttpUrl(sourceUrl, "Source URL"),
   });
+
+  // Pick the reviewer with the lightest queue in this track. If that fails or
+  // nobody is available, the evidence stays in the track's shared pool.
+  try {
+    await assignEvidence(evidence._id, track, userId);
+  } catch (error) {
+    console.error("Evidence assignment failed:", error.message);
+  }
 
   await recalculateCandidateSkillScore(candidateSkill._id);
 
@@ -264,6 +285,7 @@ const updateEvidence = async (
   }
 
   // Editing invalidates the previous analysis and review.
+  // The assigned reviewer is kept, so follow-ups go back to the same person.
   evidence.aiAnalysis = null;
   evidence.confidenceScore = 0;
   evidence.verificationStatus = "PENDING";
@@ -382,8 +404,11 @@ const analyzeEvidence = async (userId, evidenceId) => {
   evidence.aiAnalysis = analysis;
   evidence.confidenceScore = analysis.overallEvidenceScore;
 
-  // A previous approval applies to the old analysis, not this new one.
-  if (evidence.verificationStatus === "VERIFIED") {
+  // A previous decision applies to the old analysis, not this new one.
+  if (
+    evidence.verificationStatus === "VERIFIED" ||
+    evidence.verificationStatus === "CHANGES_REQUESTED"
+  ) {
     evidence.verificationStatus = "PENDING";
     evidence.verifiedAt = null;
     evidence.reviewedBy = null;
@@ -399,64 +424,7 @@ const analyzeEvidence = async (userId, evidenceId) => {
   return Evidence.findById(evidence._id).populate(SKILL_POPULATE);
 };
 
-// Reviewer approves or rejects evidence.
-const reviewEvidence = async (
-  reviewerUserId,
-  evidenceId,
-  { status, reviewNote = "" } = {}
-) => {
-  if (!["VERIFIED", "REJECTED"].includes(status)) {
-    throw new AppError(
-      "Review status must be VERIFIED or REJECTED",
-      400
-    );
-  }
-
-  if (typeof reviewNote !== "string" || reviewNote.length > 1000) {
-    throw new AppError(
-      "Review note must be 1000 characters or fewer",
-      400
-    );
-  }
-
-  const evidence = await Evidence.findById(evidenceId);
-
-  if (!evidence) {
-    throw new AppError("Evidence not found", 404);
-  }
-
-  // Nobody reviews their own work.
-  const owner = await Candidate.findById(evidence.candidateId).select(
-    "userId"
-  );
-
-  if (owner && String(owner.userId) === String(reviewerUserId)) {
-    throw new AppError("You cannot review your own evidence", 403);
-  }
-
-  // A skill score comes from analyzed evidence, so require the analysis first.
-  if (status === "VERIFIED" && !evidence.aiAnalysis) {
-    throw new AppError(
-      "Run the AI analysis before verifying this evidence",
-      400
-    );
-  }
-
-  const candidateSkillId = evidence.candidateSkillId;
-
-  evidence.verificationStatus = status;
-  evidence.reviewedBy = reviewerUserId;
-  evidence.reviewedAt = new Date();
-  evidence.reviewNote = reviewNote.trim();
-  evidence.verifiedAt = status === "VERIFIED" ? new Date() : null;
-
-  await evidence.save();
-
-  await recalculateCandidateSkillScore(candidateSkillId);
-
-  return Evidence.findById(evidence._id).populate(SKILL_POPULATE);
-};
-
+// Reviews now live in modules/reviews (queue scoping, audit log, assignment).
 module.exports = {
   createEvidence,
   updateEvidence,
@@ -464,6 +432,5 @@ module.exports = {
   getEvidenceById,
   removeEvidence,
   analyzeEvidence,
-  reviewEvidence,
   recalculateCandidateSkillScore,
 };
