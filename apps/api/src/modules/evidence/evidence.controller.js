@@ -5,7 +5,6 @@ const {
   getEvidenceById,
   removeEvidence,
   analyzeEvidence,
-  reviewEvidence,
 } = require("./evidence.service");
 
 const AppError = require("../../core/errors/AppError");
@@ -189,38 +188,6 @@ const analyze = async (req, res, next) => {
 };
 
 
-const review = async (req, res, next) => {
-  try {
-    const { evidenceId } = req.params;
-    const { status, reviewNote } = req.body;
-
-    if (!evidenceId || !status) {
-      throw new AppError(
-        "Evidence ID and review status are required",
-        400
-      );
-    }
-
-    const evidence = await reviewEvidence(
-      req.user.userId,
-      evidenceId,
-      { status, reviewNote }
-    );
-
-    return sendSuccess(
-      res,
-      200,
-      `Evidence ${status.toLowerCase()} successfully`,
-      evidence
-    );
-  } catch (error) {
-    next(error);
-  }
-};
-
-
-
-
 module.exports = {
   create,
   update,
@@ -228,5 +195,4 @@ module.exports = {
   getOne,
   remove,
   analyze,
-  review,
 };
