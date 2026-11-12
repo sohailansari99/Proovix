@@ -3,6 +3,30 @@
 const mongoose = require("mongoose");
 const AppError = require("../errors/AppError");
 
+// String validation helpers
+const requireString = (value, fieldName = "Field", maxLength = 1000) => {
+  if (!value || typeof value !== "string" || !value.trim()) {
+    throw new AppError(`${fieldName} is required`, 400);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > maxLength) {
+    throw new AppError(`${fieldName} must be ${maxLength} characters or fewer`, 400);
+  }
+  return trimmed;
+};
+
+const optionalString = (value, fieldName = "Field", maxLength = 1000) => {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string") {
+    throw new AppError(`${fieldName} must be a string`, 400);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > maxLength) {
+    throw new AppError(`${fieldName} must be ${maxLength} characters or fewer`, 400);
+  }
+  return trimmed;
+};
+
 // Email validation - only Gmail allowed per requirements
 const isValidGmail = (email) => {
   return /^[a-zA-Z0-9._%+-]+@gmail\.com$/i.test(email);
@@ -19,11 +43,17 @@ const requireObjectId = (id, fieldName = "ID") => {
 const optionalHttpUrl = (url, fieldName = "URL") => {
   if (!url) return "";
 
-  if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
+  if (typeof url !== "string") {
     throw new AppError(`${fieldName} must be a valid HTTP or HTTPS URL`, 400);
   }
 
-  return url.trim();
+  const trimmed = url.trim();
+
+  if (!/^https?:\/\//i.test(trimmed)) {
+    throw new AppError(`${fieldName} must be a valid HTTP or HTTPS URL`, 400);
+  }
+
+  return trimmed;
 };
 
 // Password strength validation
@@ -56,6 +86,8 @@ const validatePassword = (password) => {
 };
 
 module.exports = {
+  requireString,
+  optionalString,
   isValidGmail,
   requireObjectId,
   optionalHttpUrl,

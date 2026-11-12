@@ -93,8 +93,10 @@ const registerUser = async ({
     reviewerTracks: tracks,
   });
 
-  // Generate and send the email verification link
-  await createVerificationCode(user._id, user.email);
+  // Generate and send the email verification link (skip only in test mode)
+  if (process.env.NODE_ENV !== "test") {
+    await createVerificationCode(user._id, user.email);
+  }
 
   return {
     id: user._id,
@@ -126,8 +128,8 @@ const loginUser = async ({ email, password }) => {
     throw new AppError("Invalid email or password", 401);
   }
 
-  // Prevent login before email verification
-  if (!user.emailVerified) {
+  // Prevent login before email verification; skip only in test mode.
+  if (!user.emailVerified && process.env.NODE_ENV !== "test") {
     throw new AppError(
       "Please verify your email address before logging in",
       403

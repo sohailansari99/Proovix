@@ -221,6 +221,24 @@ function validateAndNormalizeAnalysis(analysis, skill) {
 }
 
 const analyzeEvidenceWithAI = async ({ evidence, skill }) => {
+  if (process.env.STUB_AI === "true" && process.env.NODE_ENV !== "production") {
+    console.log("[Proovix AI] Using STUBBED AI Response");
+    const competencies = Array.isArray(skill.competencies)
+      ? skill.competencies.map((name) => ({
+          name: String(name).trim(),
+          score: 85,
+          reason: "Stubbed strong evidence implementation",
+        }))
+      : [];
+    return {
+      summary: "Stubbed AI analysis completed successfully.",
+      competencies,
+      strengths: ["Clean implementation", "Good practices"],
+      missingEvidence: [],
+      overallEvidenceScore: 85,
+    };
+  }
+
   if (!process.env.OPENROUTER_API_KEY) {
     throw new AppError("OpenRouter API key is not configured", 500);
   }
